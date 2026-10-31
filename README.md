@@ -33,17 +33,17 @@ src/content/selectors.js DOM anchors (message list, rows, composer, pinned contr
 src/content/content.js   Applies state, tags dividers, builds the banner and pin button
 src/content/teams.css    One CSS block per feature, gated by an attribute on <html>
 src/popup/               Popup markup, styling and checkbox logic
-icons/                   icon16 / icon32 / icon48 / icon128, generated from the transparent master
-teamsplusplus.png        Source artwork (1254×1254, white background)
-teamsplusplus-transparent.png  Same artwork with the background knocked out — the resize source
+icons/icon*.png         Extension icons — the files manifest.json points at
+icons/teamsplusplus.png              Source artwork (1254×1254, white background)
+icons/teamsplusplus-transparent.png   Same artwork with the background knocked out
 ```
 
 Regenerate the icon sizes after replacing the source artwork (macOS `sips`). Resize from
-`teamsplusplus-transparent.png` so the icons keep their transparency:
+the transparent file so the icons keep their cut-out background:
 
 ```bash
 for size in 16 32 48 128; do
-  sips -z "$size" "$size" teamsplusplus-transparent.png --out "icons/icon${size}.png"
+  sips -z "$size" "$size" icons/teamsplusplus-transparent.png --out "icons/icon${size}.png"
 done
 ```
 
@@ -100,5 +100,5 @@ To list every anchor Teams exposes on a page, run this in DevTools:
   is missing, the tweak does nothing rather than opening a panel of its own.
 - Divider detection reads row text, so a post whose entire body is just a date could be
   mistaken for a separator. The check skips anything inside a message body.
-- Icons in `icons/` are generated from `teamsplusplus-transparent.png`; regenerate with the
-  command in the Layout section after replacing the source artwork.
+- Icons in `icons/` are generated from `icons/teamsplusplus-transparent.png`; regenerate
+  with the command in the Layout section after replacing the source artwork.

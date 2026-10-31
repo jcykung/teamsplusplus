@@ -1,158 +1,333 @@
 /*
- * Better Teams — stylesheet tweaks.
+ * Teams++ — stylesheet.
  *
- * Blocks gated by `html[data-bt-*]` are switched by the content script's
- * attribute flags. Blocks targeting `.bt-*` element classes work on nodes the
- * content script tags, so they are gated the same way to keep toggling instant.
+ * Feature blocks are gated by `html[data-tpp-*]`, which the content script
+ * sets from the popup switches. Everything else targets `.tpp-*` nodes the
+ * content script injects, so Teams' hashed class names never enter the
+ * selectors.
  *
- * Teams ships hashed class names that change between releases; selectors here
- * use its `data-tid` attributes and roles. Verify in DevTools before relying on
- * them, and keep the `!important` flags to the minimum needed to win.
+ * Teams ships a different theme in light and dark mode; the neutral colours
+ * below lean on Teams' own `--colorNeutral*` variables, while the purple brand
+ * colours stay fixed.
  */
 
 :root {
-  --bt-surface: var(--colorNeutralBackground1, #1f1f1f);
-  --bt-text-muted: var(--colorNeutralForeground3, #b3b3b3);
-  --bt-line: rgba(255, 255, 255, 0.16);
-  --bt-unread: #e81123;
-  --bt-banner: #444791;
-  --bt-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  --tpp-purple: #6264a7;
+  --tpp-purple-dark: #4b53a0;
+  --tpp-purple-user: #8b5cf6;
+  --tpp-surface: var(--colorNeutralBackground1, #ffffff);
+  --tpp-text-muted: var(--colorNeutralForeground3, #616161);
+  --tpp-line: rgba(98, 100, 167, 0.24);
+  --tpp-shadow: 0 6px 18px rgba(47, 47, 92, 0.28);
 }
 
-/* Feature: dateDividers ------------------------------------------------ */
-/* Pins the day label to the top of the list, Discord-style: a centred label
-   over a hairline, sitting on a solid strip so posts scroll beneath it. */
-html[data-bt-date-dividers] .bt-divider--date {
-  position: sticky !important;
-  top: 0;
-  z-index: 3;
+/* Inbox Zero: one post, one archive control ------------------------------ */
+
+html[data-tpp-inbox-zero] .tpp-post {
+  position: relative !important;
+}
+
+html[data-tpp-inbox-zero] .tpp-archived {
+  display: none !important;
+}
+
+/* Shown in "Show All Posts" mode so archived threads are still recognisable. */
+html[data-tpp-inbox-zero] .tpp-archived--visible {
+  box-shadow: inset 3px 0 0 rgba(139, 92, 246, 0.55);
+}
+
+.tpp-post-actions {
+  position: absolute;
+  top: 4px;
+  right: 42px;
+  z-index: 6;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
-  margin: 4px 0 !important;
-  padding: 5px 0 !important;
-  background: var(--bt-surface);
-  color: var(--bt-text-muted);
-  font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  box-shadow: inset 0 -1px 0 var(--bt-line);
+  gap: 4px;
+  opacity: 0.62;
+  transition: opacity 0.15s ease;
 }
 
-html[data-bt-date-dividers] .bt-divider--date::before,
-html[data-bt-date-dividers] .bt-divider--date::after {
-  content: "";
-  flex: 1 1 auto;
-  height: 1px;
-  background: var(--bt-line);
+.tpp-post:hover .tpp-post-actions,
+.tpp-post:focus-within .tpp-post-actions {
+  opacity: 1;
 }
 
-/* Feature: avatarOffset ------------------------------------------------ */
-/* Moves avatars slightly left and gives every post breathing room, so one post
-   reads as one block instead of a wall of text. */
-html[data-bt-avatar-offset] [data-tid="chat-pane-message"],
-html[data-bt-avatar-offset] [data-tid="message-pane-list-message"] {
-  padding-top: 6px !important;
-  padding-bottom: 6px !important;
-}
-
-html[data-bt-avatar-offset] [data-tid="chat-pane-message"] + [data-tid="chat-pane-message"],
-html[data-bt-avatar-offset] [data-tid="message-pane-list-message"] + [data-tid="message-pane-list-message"] {
-  border-top: 1px solid var(--bt-line);
-}
-
-html[data-bt-avatar-offset] [data-tid="message-avatar"],
-html[data-bt-avatar-offset] [data-tid*="avatar"]:not([data-tid*="group"]) {
-  margin-left: -4px !important;
-  margin-right: 14px !important;
-  align-self: flex-start;
-}
-
-/* Feature: unreadLine -------------------------------------------------- */
-html[data-bt-unread-line] .bt-divider--unread {
-  border-top: 2px solid var(--bt-unread) !important;
-  margin-top: 8px !important;
-  padding-top: 4px !important;
-  color: var(--bt-unread) !important;
-  font-weight: 700 !important;
-}
-
-/* Feature: unreadBanner ------------------------------------------------ */
-html[data-bt-unread-banner] .bt-banner {
-  position: fixed;
-  z-index: 2147483000;
-  display: flex;
+.tpp-post-btn {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  border-radius: 6px;
-  background: var(--bt-banner);
-  color: #fff;
-  font: 500 13px/1.3 "Segoe UI", system-ui, -apple-system, sans-serif;
-  box-shadow: var(--bt-shadow);
-}
-
-html[data-bt-unread-banner] .bt-banner-text {
-  flex: 1 1 auto;
-}
-
-html[data-bt-unread-banner] .bt-banner-button {
-  flex: none;
-  padding: 3px 9px;
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--tpp-line);
+  border-radius: 999px;
+  background: var(--tpp-surface);
+  color: var(--tpp-text-muted);
+  font: 600 11px/1 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  white-space: nowrap;
   cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
-html[data-bt-unread-banner] .bt-banner-button:hover {
-  background: rgba(255, 255, 255, 0.16);
+.tpp-post-btn[hidden] {
+  display: none !important;
 }
 
-html[data-bt-unread-banner] .bt-banner-button--primary {
+.tpp-post-btn:hover {
+  background: var(--tpp-purple);
   border-color: transparent;
-  background: #fff;
-  color: #2f2f66;
-  font-weight: 600;
+  color: #fff;
 }
 
-/* Feature: pinnedShortcut ---------------------------------------------- */
-html[data-bt-pinned-shortcut] .bt-pin-button {
-  position: fixed;
+.tpp-post-btn.is-on {
+  border-color: rgba(139, 92, 246, 0.55);
+  color: var(--tpp-purple-user);
+}
+
+.tpp-post-btn.is-on:hover {
+  background: var(--tpp-purple-user);
+  border-color: transparent;
+  color: #fff;
+}
+
+.tpp-post-btn:disabled {
+  background: transparent;
+  color: var(--tpp-purple-user);
+  cursor: default;
+}
+
+.tpp-post-btn:focus-visible {
+  outline: 2px solid var(--tpp-purple);
+  outline-offset: 2px;
+}
+
+/* Pinned posts: thin stacked bars --------------------------------------- */
+
+.tpp-pin-stack {
   z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  pointer-events: auto;
+}
+
+.tpp-pin-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 6px 0 10px;
+  border-radius: 7px;
+  color: #fff;
+  font: 500 12px/1.2 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  box-shadow: var(--tpp-shadow);
+  cursor: pointer;
+  flex: none;
+}
+
+.tpp-pin-bar--native {
+  background: linear-gradient(90deg, #6264a7 0%, #4b53a0 100%);
+}
+
+.tpp-pin-bar--user {
+  background: linear-gradient(90deg, #8b5cf6 0%, #7c3aed 100%);
+}
+
+.tpp-pin-bar:hover {
+  filter: brightness(1.08);
+}
+
+.tpp-pin-bar:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+}
+
+.tpp-pin-bar-icon {
+  flex: none;
+  display: flex;
+  align-items: center;
+  opacity: 0.95;
+}
+
+.tpp-pin-bar-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tpp-pin-bar-unpin {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 22px;
+  height: 22px;
   padding: 0;
-  border: 1px solid var(--bt-line);
-  border-radius: 6px;
-  background: var(--bt-surface);
-  color: inherit;
-  font-size: 15px;
-  line-height: 1;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #fff;
+  opacity: 0.75;
   cursor: pointer;
-  box-shadow: var(--bt-shadow);
 }
 
-html[data-bt-pinned-shortcut] .bt-pin-button:hover {
-  filter: brightness(1.25);
+.tpp-pin-bar-unpin:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.2);
 }
 
-/* Feature: floatingComposer -------------------------------------------- */
-/* Lifts the compose box off the list so posts visibly scroll behind it. */
-html[data-bt-floating-composer] .bt-composer-float {
-  position: sticky;
-  bottom: 12px;
-  z-index: 4;
-  margin: 0 12px 12px !important;
-  border: 1px solid var(--bt-line);
+.tpp-pin-bar-unpin:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -1px;
+}
+
+/* Inbox Zero: confetti empty state --------------------------------------- */
+
+.tpp-empty-state {
+  z-index: 2147482998;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
   border-radius: 10px;
-  background: var(--bt-surface);
-  box-shadow: var(--bt-shadow);
+  text-align: center;
+  pointer-events: none;
+}
+
+.tpp-confetti {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.tpp-confetti i {
+  position: absolute;
+  top: -18px;
+  display: block;
+  border-radius: 2px;
+  opacity: 0.9;
+  animation-name: tpp-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+@keyframes tpp-fall {
+  0% {
+    transform: translateY(-6vh) rotate(0deg);
+  }
+  100% {
+    transform: translateY(110vh) rotate(720deg);
+  }
+}
+
+.tpp-empty-check {
+  position: relative;
+  display: flex;
+  color: var(--tpp-purple);
+  opacity: 0.92;
+}
+
+.tpp-empty-title {
+  position: relative;
+  margin: 0;
+  font: 800 clamp(24px, 4vw, 38px) / 1.1 Roboto, "Segoe UI", system-ui,
+    -apple-system, sans-serif;
+  letter-spacing: -0.02em;
+  color: var(--tpp-purple);
+}
+
+.tpp-empty-copy {
+  position: relative;
+  max-width: 420px;
+  margin: 8px 20px 0;
+  font: 500 13px/1.5 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  color: var(--tpp-text-muted);
+}
+
+/* Inbox Zero: Show All / Show Unread toggle ------------------------------ */
+
+.tpp-view-toggle {
+  z-index: 2147483000;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.tpp-view-btn {
+  pointer-events: auto;
+  padding: 8px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  background: linear-gradient(135deg, #6264a7 0%, #4b53a0 100%);
+  color: #fff;
+  font: 700 12.5px/1 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  box-shadow: var(--tpp-shadow);
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+
+.tpp-view-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.tpp-view-btn:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* Shared: toast and jump highlight --------------------------------------- */
+
+.tpp-toast {
+  z-index: 2147483001;
+  display: flex;
+  justify-content: center;
+  padding: 8px 14px;
+  border-radius: 7px;
+  background: #2f2f5c;
+  color: #fff;
+  font: 500 12px/1.35 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  text-align: center;
+  box-shadow: var(--tpp-shadow);
+  pointer-events: none;
+}
+
+.tpp-post.tpp-flash {
+  animation: tpp-flash 1.8s ease;
+}
+
+@keyframes tpp-flash {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  15% {
+    background-color: rgba(139, 92, 246, 0.2);
+  }
+  45% {
+    background-color: rgba(139, 92, 246, 0.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tpp-confetti {
+    display: none;
+  }
+
+  .tpp-post.tpp-flash {
+    animation: none;
+  }
+
+  .tpp-view-btn:hover {
+    transform: none;
+  }
 }

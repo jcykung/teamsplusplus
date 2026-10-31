@@ -1,60 +1,39 @@
 /**
- * Feature registry, shared by the content script and the popup.
+ * Shared state for Teams++.
  *
- * Loaded as a classic script in both contexts (see manifest.json), so it
- * publishes itself on globalThis instead of using ES modules.
+ * Loaded as a classic script in every context (content script, popup, and
+ * service worker), so it publishes itself on globalThis instead of using ES
+ * modules.
  *
- * `attr` is the attribute the content script puts on <html>; teams.css keys its
- * rules off it, so toggling is instant. Features that also need DOM work have a
- * matching entry in the CUSTOM map in src/content/content.js.
+ * Everything the extension remembers lives in chrome.storage.sync so it
+ * follows the user to every Chrome profile signed in with the same account:
+ *
+ *   teamsPlusPlus.features  on/off switches for the two features
+ *   teamsPlusPlus.archive   post id -> { c: reply count at archive time, t: time }
+ *   teamsPlusPlus.pins      post id -> { x: preview, a: author, t: time }
+ *   teamsPlusPlus.view      "inbox" (archived posts hidden) or "all"
  */
 (function (root) {
   'use strict';
 
-  /** chrome.storage.sync key holding the user's on/off choices. */
-  const STORAGE_KEY = 'betterTeams.features';
+  const STORAGE_KEY = 'teamsPlusPlus.features';
+  const ARCHIVE_KEY = 'teamsPlusPlus.archive';
+  const PINS_KEY = 'teamsPlusPlus.pins';
+  const VIEW_KEY = 'teamsPlusPlus.view';
 
   const FEATURES = [
     {
-      id: 'unreadBanner',
-      attr: 'data-bt-unread-banner',
-      label: 'Unread banner',
-      hint: 'Shows how many posts you have not read, with jump and mark-as-read actions.',
+      id: 'inboxZero',
+      attr: 'data-tpp-inbox-zero',
+      label: 'Inbox Zero',
+      hint: 'Adds an Archive button to every post. Archived posts stay hidden like read email until someone replies, then they come back. A Show All Posts button at the bottom restores the normal view.',
       default: true
     },
     {
-      id: 'dateDividers',
-      attr: 'data-bt-date-dividers',
-      label: 'Sticky date dividers',
-      hint: 'Pins each day’s date to the top of the list while you scroll.',
-      default: true
-    },
-    {
-      id: 'avatarOffset',
-      attr: 'data-bt-avatar-offset',
-      label: 'Separate each post',
-      hint: 'Offsets avatars and adds spacing so posts are easier to tell apart.',
-      default: true
-    },
-    {
-      id: 'unreadLine',
-      attr: 'data-bt-unread-line',
-      label: 'Red line above unread posts',
-      hint: 'Draws a bright red rule where new messages start.',
-      default: true
-    },
-    {
-      id: 'floatingComposer',
-      attr: 'data-bt-floating-composer',
-      label: 'Floating compose box',
-      hint: 'Lifts the compose box off the list so messages scroll behind it.',
-      default: true
-    },
-    {
-      id: 'pinnedShortcut',
-      attr: 'data-bt-pinned-shortcut',
-      label: 'Pinned messages shortcut',
-      hint: 'Adds a pin button so pinned posts are one click away.',
+      id: 'pinnedMessages',
+      attr: 'data-tpp-pinned-messages',
+      label: 'Pinned message bars',
+      hint: 'Shows pinned posts in a thin purple bar at the top of the channel. Click a bar to jump to the post; pin any post yourself with the pin button.',
       default: true
     }
   ];
@@ -78,5 +57,68 @@
     return state;
   }
 
-  root.BetterTeams = { STORAGE_KEY, FEATURES, DEFAULTS, normalize };
+  /**
+   * Keep only the newest `limit` entries of an archive/pin map. Values must be
+   * objects; anything else is ignored. This is the guard that keeps a long
+   * history from filling chrome.storage.sync's per-item quota.
+   */
+  function normalizeMap(stored, limit) {
+    if (!stored || typeof stored !== 'object') return {};
+    const entries = Object.entries(stored).filter(
+      ([key, value]) =>
+        typeof key === 'string' &&
+        key.length > 0 &&
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value)
+    );
+    return Object.fromEntries(entries.slice(-limit));
+  }
+
+  function normalizeView(value) {
+    return value === 'all' ? 'all' : 'inbox';
+  }
+
+  /** Promise wrapper around chrome.storage.sync.get. */
+  function readSync(keys) {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.sync.get(keys, (items) => {
+          resolve(chrome.runtime.lastError ? {} : items || {});
+        });
+      } catch (_) {
+        // The extension was reloaded while this page stayed open.
+        resolve({});
+      }
+    });
+  }
+
+  /**
+   * Promise wrapper around chrome.storage.sync.set. Resolves false when the
+   * write failed (normally the per-item or total quota), so callers can trim
+   * their data and try again instead of silently losing it.
+   */
+  function writeSync(items) {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.sync.set(items, () => resolve(!chrome.runtime.lastError));
+      } catch (_) {
+        resolve(false);
+      }
+    });
+  }
+
+  root.TeamsPlusPlus = {
+    STORAGE_KEY,
+    ARCHIVE_KEY,
+    PINS_KEY,
+    VIEW_KEY,
+    FEATURES,
+    DEFAULTS,
+    normalize,
+    normalizeMap,
+    normalizeView,
+    readSync,
+    writeSync
+  };
 })(globalThis);

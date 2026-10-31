@@ -1,10 +1,21 @@
 {
   "manifest_version": 3,
-  "name": "Better Teams",
-  "version": "0.2.0",
-  "description": "Makes new channel posts easier to spot in Microsoft Teams on the web.",
-  "minimum_chrome_version": "105",
-  "permissions": ["storage"],
+  "name": "Teams++",
+  "short_name": "Teams++",
+  "version": "0.3.0",
+  "description": "Inbox Zero for Microsoft Teams channels — archive posts like email threads, and keep pinned posts one click away.",
+  "minimum_chrome_version": "116",
+  "author": "Jonathan Kung",
+  "homepage_url": "https://github.com/jcykung/teamsplusplus",
+  "permissions": ["storage", "scripting"],
+  "optional_host_permissions": [
+    "https://teams.microsoft.com/*",
+    "https://teams.cloud.microsoft/*",
+    "https://teams.live.com/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -12,29 +23,16 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_title": "Better Teams",
+    "default_title": "Teams++",
     "default_popup": "src/popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
-      "48": "icons/icon48.png"
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
     }
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "https://teams.microsoft.com/*",
-        "https://teams.cloud.microsoft/*",
-        "https://teams.live.com/*"
-      ],
-      "js": [
-        "src/content/selectors.js",
-        "src/shared/features.js",
-        "src/content/content.js"
-      ],
-      "css": ["src/content/teams.css"],
-      "run_at": "document_start",
-      "all_frames": false
-    }
-  ]
+  "background": {
+    "service_worker": "background.js"
+  }
 }

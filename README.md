@@ -1,45 +1,82 @@
-# Better Teams
+# Teams++
 
-A Chrome extension (Manifest V3) that makes new posts easier to spot in Microsoft Teams
-channels. It follows the same shape as the Better Teacher Portal extension: a content
-script applies feature toggles to the host page, each toggle is stored in
-`chrome.storage.sync`, and a popup exposes the switches.
+A Chrome extension (Manifest V3) that turns Microsoft Teams channels into an
+inbox. Archive posts like read email, and keep pinned posts one click away.
+
+It uses the same popup, welcome-screen and changelog design as the Better Teacher
+Portal and Classroom++ extensions, with Teams++ branding and a purple-and-white
+palette that matches Microsoft Teams.
 
 ## Install (unpacked)
 
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode**.
 3. Click **Load unpacked** and select this folder.
-4. Open <https://teams.microsoft.com>, pick a channel, and click the extension icon to
-   toggle tweaks. Changes apply to open tabs without a reload.
+4. Open the extension popup and click **Enable on Microsoft Teams**. Chrome asks
+   for access to Teams only at that moment — nothing runs before you click.
+5. Open <https://teams.microsoft.com>, pick a channel, and use the buttons on each
+   post.
 
-## Tweaks
+The welcome screen opens on first install, and the changelog opens after an update.
+Access can be revoked at any time from `chrome://extensions` → **Site access**.
 
-| Toggle | What it does | How it works |
-| --- | --- | --- |
-| Unread banner | Shows "N new posts" with **Jump to unread** and **Mark as read** above the list | Overlay anchored to the list; reads Teams' own "new messages" separator |
-| Sticky date dividers | Pins each day's label to the top while scrolling, with rules either side | Content script tags Teams' date rows; CSS makes them `position: sticky` |
-| Separate each post | Offsets avatars and adds spacing plus a hairline between posts | Pure CSS on message rows |
-| Red line above unread posts | Bright red rule where new messages begin | CSS on the tagged "new messages" row |
-| Floating compose box | Lifts the compose box off the list so posts scroll behind it | Content script tags the composer; CSS makes it sticky with a shadow |
-| Pinned messages shortcut | Pin button in the corner of the message pane | Clicks Teams' own pinned-messages control |
+## Features
+
+### Inbox Zero
+
+Every post gets an **Archive** button at the top. Archiving hides the post from the
+channel, just like moving a read email out of your inbox.
+
+- A post comes back automatically when someone replies to it. Teams++ remembers how
+  many replies the thread had when you archived it, and un-hides it when that number
+  grows.
+- Posts you have not archived always stay visible.
+- When every post in the channel is archived, the empty space shows confetti and an
+  **Inbox Zero!** message.
+- A **Show All Posts** button at the bottom switches to the normal Teams view and
+  shows every post. In that view the button becomes **Show Unread Posts** to return
+  to Inbox Zero. Archived posts are marked with a violet edge while shown.
+
+### Pinned posts
+
+Pinned posts appear in thin bars at the top of the channel.
+
+- Posts pinned by a channel moderator (Teams' own pins) sit first, in Teams purple.
+- Posts you pin yourself sit below them in a lighter violet.
+- Multiple pins stack vertically; the stack scrolls if it gets tall.
+- Click a bar to jump to the post. Click the crossed-pin icon on a bar to unpin it
+  (your own pins are removed immediately; Teams pins use Teams' own unpin control
+  when it is available).
+- Every post also has a **Pin** button, so anyone can keep a post at the top.
+
+Both features are independent switches in the popup. Archive state, pins and the
+current view are stored in `chrome.storage.sync`, so they follow the user to every
+Chrome profile signed in with the same account.
 
 ## Layout
 
 ```
-manifest.json            MV3 manifest: content script matches, storage permission, popup
-src/shared/features.js   Feature registry — the single source of truth for toggles
-src/content/selectors.js DOM anchors (message list, rows, composer, pinned control)
-src/content/content.js   Applies state, tags dividers, builds the banner and pin button
-src/content/teams.css    One CSS block per feature, gated by an attribute on <html>
-src/popup/               Popup markup, styling and checkbox logic
-icons/icon*.png         Extension icons — the files manifest.json points at
+manifest.json            MV3 manifest: optional Teams host access, storage/scripting,
+                         popup, and no statically injected content script
+background.js            Owns the optional permission. Registers the content script
+                         after Enable, unregisters it if access is revoked, opens the
+                         welcome screen on install and the changelog on update
+onboarding.html          Welcome screen shown on first install
+onboarding.js            Requests Teams access, opens Teams, the changelog and Ko-fi
+changelog.html           Timeline of what changed in each version
+changelog.js             Links the changelog back to the welcome screen
+src/shared/features.js   Feature registry + sync-storage keys and helpers
+src/content/selectors.js DOM anchors (message rows, bodies, authors, pins)
+src/content/content.js   Archive/pin buttons, Inbox Zero, confetti, pinned bars
+src/content/teams.css    All injected UI, gated by data-tpp-* on <html>
+src/popup/               Popup markup, styling and access/switch logic
+icons/icon*.png          Extension icons — the files manifest.json points at
 icons/teamsplusplus.png              Source artwork (1254×1254, white background)
 icons/teamsplusplus-transparent.png   Same artwork with the background knocked out
 ```
 
-Regenerate the icon sizes after replacing the source artwork (macOS `sips`). Resize from
-the transparent file so the icons keep their cut-out background:
+Regenerate the icon sizes after replacing the source artwork (macOS `sips`). Resize
+from the transparent file so the icons keep their cut-out background:
 
 ```bash
 for size in 16 32 48 128; do
@@ -47,14 +84,32 @@ for size in 16 32 48 128; do
 done
 ```
 
-## Adding a UI tweak
+## How it works
+
+- Chrome grants no Teams host permission at install. The content script is registered
+  dynamically with `chrome.scripting.registerContentScripts` only after the user
+  clicks Enable, and is removed again if access is revoked.
+- Teams re-renders its message list constantly, so the content script runs one
+  debounced scan (300 ms) after DOM changes. The scan finds the outermost message
+  rows, tags them with `data-tpp-id`, and repairs buttons, hidden posts and overlays.
+- Posts are identified by Teams' `data-mid` / `data-message-id` / `data-item-id`
+  when available, otherwise by a stable hash of the post text and timestamp.
+- Archived posts are hidden with CSS (`display: none`) rather than removed, so Teams
+  keeps rendering the thread and replies are still detected.
+- Reply counts are read from Teams' "N replies" text. If Teams changes that wording,
+  update `replyCount()` in `src/content/content.js`.
+- The UI is anchored to the message list with fixed positioning, recalculated on
+  resize and scroll. It never rewrites Teams' own markup beyond adding classes and
+  buttons.
+
+## Adding a feature switch
 
 1. **Register it** in `src/shared/features.js`:
 
    ```js
    {
      id: 'hideMeetingBar',
-     attr: 'data-bt-hide-meeting-bar',
+     attr: 'data-tpp-hide-meeting-bar',
      label: 'Hide the meeting bar',
      hint: 'Removes the bar shown during a call.',
      default: false
@@ -64,25 +119,24 @@ done
 2. **Style it** in `src/content/teams.css`, gated on the attribute:
 
    ```css
-   html[data-bt-hide-meeting-bar] [data-tid='meeting-bar'] {
+   html[data-tpp-hide-meeting-bar] [data-tid='meeting-bar'] {
      display: none !important;
    }
    ```
 
-3. If it needs DOM work that CSS can't express, add an `on()` / `off()` pair under
-   `CUSTOM` in `src/content/content.js`.
+3. If it needs DOM work, add it to the scan in `src/content/content.js`.
 
 The popup is generated from the registry, so it needs no changes.
 
 ## Verifying selectors after a Teams update
 
-Teams' hashed class names change between releases, so everything is keyed off `data-tid`
-attributes, ARIA labels and roles. If a tweak stops working, inspect the element in
-DevTools and check these in order:
+Teams' hashed class names change between releases, so everything is keyed off
+`data-tid` attributes, ARIA labels and roles. If something stops working, inspect the
+element in DevTools and check these in order:
 
 1. `src/content/selectors.js` — the candidate lists, most likely fix.
-2. The text matching in `markDividers()` (`src/content/content.js`) if the date or
-   "new messages" labels are no longer detected.
+2. `replyCount()` and `isNativePinned()` in `src/content/content.js` if reply counts
+   or moderator pins are no longer detected.
 
 To list every anchor Teams exposes on a page, run this in DevTools:
 
@@ -92,13 +146,15 @@ To list every anchor Teams exposes on a page, run this in DevTools:
 
 ## Known limits
 
-- Teams does not expose the timestamp of its "new messages" separator in the DOM, so the
-  banner counts posts rather than saying "since 7:14 PM".
-- **Mark as read** scrolls the list to the newest post, which is what Teams itself uses to
-  clear unread state. It does not call a private API.
-- The pin button only appears when Teams' own pinned-messages control is present; if it
-  is missing, the tweak does nothing rather than opening a panel of its own.
-- Divider detection reads row text, so a post whose entire body is just a date could be
-  mistaken for a separator. The check skips anything inside a message body.
-- Icons in `icons/` are generated from `icons/teamsplusplus-transparent.png`; regenerate
-  with the command in the Layout section after replacing the source artwork.
+- Teams does not expose a public API for pinned posts. Moderator pins are detected
+  from the pin indicator on a post, and from Teams' pinned-messages pane while it is
+  open. If Teams renders neither, the post will not get a bar automatically; the Pin
+  button always works.
+- Reply counts are read from visible "N replies" text. A thread whose replies are only
+  reachable through a separate pane may show zero, in which case a reply still
+  un-archives it as soon as Teams shows a count.
+- The archive and pin maps are capped (150 posts and 40 pins) and trimmed if Chrome
+  Sync's per-item quota is reached. The newest entries are kept.
+- Archived posts are hidden per channel by post id, not per Teams account. Because
+  the data lives in Chrome Sync, a different signed-in Chrome profile sees the same
+  archive only if Chrome Sync is enabled for the extension.

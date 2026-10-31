@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Better Teams",
+  "version": "0.2.0",
+  "description": "Makes new channel posts easier to spot in Microsoft Teams on the web.",
+  "minimum_chrome_version": "105",
+  "permissions": ["storage"],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Better Teams",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://teams.microsoft.com/*",
+        "https://teams.cloud.microsoft/*",
+        "https://teams.live.com/*"
+      ],
+      "js": [
+        "src/content/selectors.js",
+        "src/shared/features.js",
+        "src/content/content.js"
+      ],
+      "css": ["src/content/teams.css"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

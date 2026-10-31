@@ -1,0 +1,158 @@
+/*
+ * Better Teams — stylesheet tweaks.
+ *
+ * Blocks gated by `html[data-bt-*]` are switched by the content script's
+ * attribute flags. Blocks targeting `.bt-*` element classes work on nodes the
+ * content script tags, so they are gated the same way to keep toggling instant.
+ *
+ * Teams ships hashed class names that change between releases; selectors here
+ * use its `data-tid` attributes and roles. Verify in DevTools before relying on
+ * them, and keep the `!important` flags to the minimum needed to win.
+ */
+
+:root {
+  --bt-surface: var(--colorNeutralBackground1, #1f1f1f);
+  --bt-text-muted: var(--colorNeutralForeground3, #b3b3b3);
+  --bt-line: rgba(255, 255, 255, 0.16);
+  --bt-unread: #e81123;
+  --bt-banner: #444791;
+  --bt-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+/* Feature: dateDividers ------------------------------------------------ */
+/* Pins the day label to the top of the list, Discord-style: a centred label
+   over a hairline, sitting on a solid strip so posts scroll beneath it. */
+html[data-bt-date-dividers] .bt-divider--date {
+  position: sticky !important;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 4px 0 !important;
+  padding: 5px 0 !important;
+  background: var(--bt-surface);
+  color: var(--bt-text-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  box-shadow: inset 0 -1px 0 var(--bt-line);
+}
+
+html[data-bt-date-dividers] .bt-divider--date::before,
+html[data-bt-date-dividers] .bt-divider--date::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--bt-line);
+}
+
+/* Feature: avatarOffset ------------------------------------------------ */
+/* Moves avatars slightly left and gives every post breathing room, so one post
+   reads as one block instead of a wall of text. */
+html[data-bt-avatar-offset] [data-tid="chat-pane-message"],
+html[data-bt-avatar-offset] [data-tid="message-pane-list-message"] {
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+}
+
+html[data-bt-avatar-offset] [data-tid="chat-pane-message"] + [data-tid="chat-pane-message"],
+html[data-bt-avatar-offset] [data-tid="message-pane-list-message"] + [data-tid="message-pane-list-message"] {
+  border-top: 1px solid var(--bt-line);
+}
+
+html[data-bt-avatar-offset] [data-tid="message-avatar"],
+html[data-bt-avatar-offset] [data-tid*="avatar"]:not([data-tid*="group"]) {
+  margin-left: -4px !important;
+  margin-right: 14px !important;
+  align-self: flex-start;
+}
+
+/* Feature: unreadLine -------------------------------------------------- */
+html[data-bt-unread-line] .bt-divider--unread {
+  border-top: 2px solid var(--bt-unread) !important;
+  margin-top: 8px !important;
+  padding-top: 4px !important;
+  color: var(--bt-unread) !important;
+  font-weight: 700 !important;
+}
+
+/* Feature: unreadBanner ------------------------------------------------ */
+html[data-bt-unread-banner] .bt-banner {
+  position: fixed;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--bt-banner);
+  color: #fff;
+  font: 500 13px/1.3 "Segoe UI", system-ui, -apple-system, sans-serif;
+  box-shadow: var(--bt-shadow);
+}
+
+html[data-bt-unread-banner] .bt-banner-text {
+  flex: 1 1 auto;
+}
+
+html[data-bt-unread-banner] .bt-banner-button {
+  flex: none;
+  padding: 3px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+html[data-bt-unread-banner] .bt-banner-button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+html[data-bt-unread-banner] .bt-banner-button--primary {
+  border-color: transparent;
+  background: #fff;
+  color: #2f2f66;
+  font-weight: 600;
+}
+
+/* Feature: pinnedShortcut ---------------------------------------------- */
+html[data-bt-pinned-shortcut] .bt-pin-button {
+  position: fixed;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--bt-line);
+  border-radius: 6px;
+  background: var(--bt-surface);
+  color: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--bt-shadow);
+}
+
+html[data-bt-pinned-shortcut] .bt-pin-button:hover {
+  filter: brightness(1.25);
+}
+
+/* Feature: floatingComposer -------------------------------------------- */
+/* Lifts the compose box off the list so posts visibly scroll behind it. */
+html[data-bt-floating-composer] .bt-composer-float {
+  position: sticky;
+  bottom: 12px;
+  z-index: 4;
+  margin: 0 12px 12px !important;
+  border: 1px solid var(--bt-line);
+  border-radius: 10px;
+  background: var(--bt-surface);
+  box-shadow: var(--bt-shadow);
+}

@@ -79,6 +79,19 @@
     ],
 
     /**
+     * The time Teams shows beside a post's author. In the compact view it comes
+     * out of the header, which is the part that made the header wrap onto a
+     * second line; the name and the subject keep the line.
+     */
+    messageTime: [
+      '[id^="timestamp-"]',
+      'time',
+      '[data-tid*="timestamp" i]',
+      '[data-tid*="message-time" i]',
+      '[data-tid*="created" i]'
+    ],
+
+    /**
      * Ancestors that mean a row is a comment or a reply rather than a post.
      * Only posts get archive/pin buttons, so matches here are skipped. Teams
      * prefixes comment markup with `comment-message-*`, which the second entry

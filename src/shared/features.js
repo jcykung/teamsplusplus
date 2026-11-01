@@ -34,7 +34,14 @@
       id: 'pinnedMessages',
       attr: 'data-tpp-pinned-messages',
       label: 'Pinned message bars',
-      hint: 'Shows pinned posts as purple bars at the top of the channel. Click a bar to open the post and its replies; pin any post yourself with the pin button.',
+      hint: 'Shows pinned posts as purple bars at the top of the channel. Click a bar to jump to the post where it sits in the stream; a pinned post cannot be archived until it is unpinned.',
+      default: true
+    },
+    {
+      id: 'compactPosts',
+      attr: 'data-tpp-compact-posts',
+      label: 'Compact posts',
+      hint: 'Shows every post as a header line and one line of its text — about the height of the archive and pin buttons — so many more posts fit on a screen. The switch beside the Inbox and Archive tabs does the same thing.',
       default: true
     }
   ];
@@ -74,6 +81,54 @@
         !Array.isArray(value)
     );
     return Object.fromEntries(entries.slice(-limit));
+  }
+
+  /** The newest pin time in a channel's bucket, for ordering channels. */
+  function latestPin(bucket) {
+    let newest = 0;
+    for (const entry of Object.values(bucket || {})) {
+      if (entry && typeof entry.t === 'number' && entry.t > newest) newest = entry.t;
+    }
+    return newest;
+  }
+
+  /**
+   * Coerce stored pins into `{ channel: { postId: entry } }`.
+   *
+   * A pin belongs to the channel it was made in, so the map is nested one level
+   * deeper than it used to be. Channels are kept newest first and trimmed to
+   * `channelLimit`, because one-chrome.storage.sync quota is shared by every
+   * channel the user has ever pinned in; pins inside a channel are trimmed to
+   * `perChannel`. A flat map from an older build names no channel and is left
+   * for the content script to adopt (isLegacyPins).
+   */
+  function normalizePins(stored, perChannel, channelLimit) {
+    if (!stored || typeof stored !== 'object') return {};
+
+    const channels = {};
+    for (const [channel, bucket] of Object.entries(stored)) {
+      if (!channel || !bucket || typeof bucket !== 'object' || Array.isArray(bucket)) continue;
+      const pins = normalizeMap(bucket, perChannel);
+      if (Object.keys(pins).length) channels[channel] = pins;
+    }
+
+    const newest = Object.entries(channels).sort((a, b) => latestPin(b[1]) - latestPin(a[1]));
+    return Object.fromEntries(newest.slice(0, channelLimit));
+  }
+
+  /**
+   * True for the old one-flat-map pins, which name no channel. A channel bucket
+   * holds pins and a pin holds strings and numbers, so the two are easy to tell
+   * apart one level down.
+   */
+  function isLegacyPins(stored) {
+    if (!stored || typeof stored !== 'object') return false;
+    const entries = Object.values(stored);
+    if (!entries.length) return false;
+    return entries.every((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      return !Object.values(value).every((inner) => inner && typeof inner === 'object');
+    });
   }
 
   function normalizeView(value) {
@@ -118,6 +173,8 @@
     DEFAULTS,
     normalize,
     normalizeMap,
+    normalizePins,
+    isLegacyPins,
     normalizeView,
     readSync,
     writeSync

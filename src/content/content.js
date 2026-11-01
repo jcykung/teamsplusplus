@@ -13,9 +13,9 @@
  *                   "Archive all older posts".
  *
  *   Pinned posts    Pinned posts sit in purple bars directly under the channel
- *                   menu bar, above the "Post in channel" box. A bar opens the
- *                   post in a modal over a blurred page, so nothing behind it
- *                   moves.
+ *                   menu bar, above the "Post in channel" box. A bar jumps to the
+ *                   post where it sits in the stream, and a pinned post is never
+ *                   archived until it is unpinned.
  *                   Posts pinned by a channel moderator sit first in Teams
  *                   purple; posts you pin yourself sit below in a lighter violet.
  *
@@ -37,6 +37,8 @@
     FEATURES,
     normalize,
     normalizeMap,
+    normalizePins,
+    isLegacyPins,
     normalizeView,
     readSync,
     writeSync
@@ -44,7 +46,9 @@
   const S = globalThis.TeamsPlusPlusSelectors;
 
   const ARCHIVE_LIMIT = 150;
+  /** Pins kept in one channel, and channels whose pins are kept at all. */
   const PIN_LIMIT = 40;
+  const PIN_CHANNEL_LIMIT = 40;
 
   const VIEW_INBOX = 'inbox';
   const VIEW_ARCHIVES = 'archives';
@@ -52,14 +56,12 @@
   const TABS_ID = 'tpp-tabs';
   const STACK_ID = 'tpp-pin-stack';
   const EMPTY_ID = 'tpp-empty-state';
+  const PIN_COPY_ID = 'tpp-pin-copy';
   const GAP_ID = 'tpp-gap';
   const TOAST_ID = 'tpp-toast';
-  const MODAL_ID = 'tpp-pin-modal';
   const HAS_ARCHIVES_ATTR = 'data-tpp-has-archives';
-  /** Set on <html> while a pinned post is lifted into its panel. */
-  const MODAL_ATTR = 'data-tpp-pin-modal';
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-01.7';
+  const BUILD = '2026-11-01.8';
 
   /** How close the pointer must be to the seam between two posts, in px. */
   const GAP_TOLERANCE = 14;
@@ -76,12 +78,13 @@
   /** A solid box, for the "this post is archived" state, like a filled pin. */
   const ARCHIVE_FILLED_SVG =
     '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="2.5" y="3.5" width="19" height="5" rx="1.2" fill="currentColor"/><path fill="currentColor" d="M4 10h16v9.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19.5z"/></svg>';
-  const CLOSE_SVG =
-    '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6 6 18"/></svg>';
   const CHECK_SVG =
     '<svg viewBox="0 0 24 24" width="46" height="46" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
   const EMPTY_ARCHIVE_SVG =
     '<svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 13h4"/></svg>';
+  /** The compact view switch, drawn beside the Inbox/Archive tabs. */
+  const COMPACT_SVG =
+    '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>';
   const CONFETTI_COLORS = [
     '#6264a7',
     '#8b5cf6',
@@ -95,7 +98,14 @@
   let ready = false;
   let features = null;
   let archive = {};
+  /**
+   * Every channel's pins, keyed by channel path, and `pins` as the bucket of
+   * the channel on screen. A pin belongs to the channel it was made in, so the
+   * bars only ever show the pins of this channel.
+   */
+  let pinsAll = {};
   let pins = {};
+  let pinChannel = '';
   let view = VIEW_INBOX;
 
   /** id -> { row, text, author, replies, archived } for the latest scan. */
@@ -116,76 +126,86 @@
   let hiddenNativeTab = null;
   /** The last post on show, which carries the filler that keeps the list deep. */
   let depthTail = null;
-  /** How many posts are on a pinned bar rather than in the stream. */
-  let pinnedHidden = 0;
-  /** The wrapper's own inline properties a lifted panel borrows and gives back. */
-  const LIFT_PROPS = [
-    'position',
-    'top',
-    'left',
-    'right',
-    'bottom',
-    'width',
-    'height',
-    'max-height',
-    'margin',
-    'overflow',
-    'box-sizing',
-    'transform',
-    'z-index',
-    'display',
-    'min-width',
-    'max-width',
-    'visibility',
-    'content-visibility',
-    'color',
-    'background-color'
-  ];
-
-  /** What a hidden post has to be given before it can be measured. */
-  const BOX_PROPS = ['display', 'visibility', 'content-visibility'];
-
-  /** What a Teams flyout lends while it is lifted above the panel. */
-  const FLYOUT_PROPS = [
-    'position',
-    'top',
-    'left',
-    'right',
-    'bottom',
-    'width',
-    'height',
-    'margin',
-    'transform'
-  ];
-  /** How deep a flyout is looked for inside a team of newly added nodes. */
-  const FLYOUT_DEPTH = 10;
-
-  /** The pinned post on show in the modal, if any, and the bar that opened it. */
-  let pinModal = null;
-  /** The live post lifted into the panel: { host, row, close, backdrop }. */
-  let liveModal = null;
-  let modalEntry = null;
-  let modalOpener = null;
-  /** Re-centres the panel when the post inside it changes size. */
-  let panelObserver = null;
-  let recentring = false;
-  /** Watches for Teams' own flyouts so they can open above the panel. */
-  let flyoutWatch = null;
-  let flyoutFrame = 0;
-  /** Nodes added since the last frame, searched for a flyout on the next one. */
-  let flyoutQueue = [];
-  /** What each lifted flyout borrowed, so it can be given back on close. */
-  const flyoutSaved = new Map();
-  /** The short sweeps run after an interaction, which is when a picker opens. */
-  let flyoutSweepTimer = 0;
-  /** Where the last click landed: what a picker opening there is looked for. */
-  let flyoutPoint = null;
-
+  /** The walk through the channel that is looking for a pinned post. */
+  let pinJump = null;
+  let flashTimer = 0;
+  /** The button that abandons that walk. */
+  let searchCancelBtn = null;
+  /** Posts the user has unfolded in the compact view, by id. */
+  const unfolded = new Set();
   let rescanTimer = 0;
   let archiveSaveTimer = 0;
   let pinsSaveTimer = 0;
   let frame = 0;
   let toastTimer = 0;
+  /**
+   * Clicking a compact post unfolds it, the way a mail app opens a message.
+   *
+   * The click is only observed, never taken: Teams still gets it, so links,
+   * reactions and the reply box behave exactly as before. Open posts are kept
+   * by id, so a re-render does not fold the one being read.
+   */
+  function onPostClick(event) {
+    if (!ready || !features || !features.compactPosts) return;
+    const target = event.target;
+    if (!target || target.nodeType !== 1) return;
+    if (target.closest('button, a, input, textarea, select, [contenteditable="true"], .tpp-post-actions')) {
+      return;
+    }
+
+    const row = target.closest('.tpp-post');
+    if (!row || !row.dataset.tppId) return;
+
+    const id = row.dataset.tppId;
+    if (unfolded.has(id)) unfolded.delete(id);
+    else unfolded.add(id);
+    row.classList.toggle('tpp-unfold', unfolded.has(id));
+  }
+
+  /** Marks a post's body so the compact view can clamp it. */
+  function markBody(row) {
+    if (row.querySelector('.tpp-body')) return;
+
+    for (const selector of S.messageBody || []) {
+      let found = null;
+      try {
+        found = row.querySelector(selector);
+      } catch (_) {
+        continue;
+      }
+      if (!found) continue;
+      found.classList.add('tpp-body');
+      return;
+    }
+  }
+
+  /**
+   * Marks the post's header line, which the compact view holds to a single
+   * line: the name, and the subject Teams shows beside it, with the time and
+   * the rest of the meta taken out of the way.
+   */
+  function markHead(row) {
+    if (row.querySelector('.tpp-head')) return;
+
+    const author = first(S.messageAuthor, row);
+    if (!author) return;
+
+    const head = author.parentElement;
+    if (!head || head === row) return;
+
+    if (!head.classList.contains('tpp-head')) head.classList.add('tpp-head');
+    if (!author.classList.contains('tpp-author')) author.classList.add('tpp-author');
+
+    // Only the time comes out. A subject Teams renders beside the name is part
+    // of the line the user asked to keep, so it stays.
+    for (const selector of S.messageTime || []) {
+      for (const el of head.querySelectorAll(selector)) {
+        if (el.contains(author) || author.contains(el)) continue;
+        if (!el.classList.contains('tpp-head-meta')) el.classList.add('tpp-head-meta');
+      }
+    }
+  }
+
   /** What a status message is centred on: the post that changed. */
   let toastAnchor = null;
 
@@ -225,8 +245,20 @@
   }
 
   function findMessageList() {
-    const direct = first(S.messageList);
-    if (direct) return direct;
+    for (const selector of S.messageList || []) {
+      let found = null;
+      try {
+        found = document.querySelector(selector);
+      } catch (_) {
+        continue; // A bad selector from a hand edit should not stop the rest.
+      }
+      // The last-resort `div[role="log"]` anchor also matches the aria-live
+      // region Teams keeps beside a message editor. Taken for the list, it
+      // parks our gutter padding, the pinned bars and the empty state inside
+      // the reply box, which clips the reply area's own controls. A candidate
+      // inside a compose field is never the list.
+      if (found && !isComposeField(found)) return found;
+    }
 
     // Markup changed: climb from a known row to whatever actually scrolls.
     const row = first(S.messageRow);
@@ -234,6 +266,15 @@
       if (isScrollable(node)) return node;
     }
     return null;
+  }
+
+  /** True inside Teams' message editor, whose live regions look like a list. */
+  function isComposeField(el) {
+    return Boolean(
+      el.closest(
+        '[data-shortcut-context="compose-field"], [contenteditable="true"], editor-aria-handler, [data-tid="ckeditor"]'
+      )
+    );
   }
 
   // --------------------------------------------------------- reading posts
@@ -475,10 +516,10 @@
       // Keep a bar's wording in step with an edited post, and fill in an author
       // that could not be read when the pin was made (the post was not loaded).
       if (pins[id]) {
-        // Fill in a body saved before the post was loaded, so a bar opened
-        // later still has the post's words to show.
-        const body = text ? text.slice(0, 1200) : '';
-        const missingBody = !pins[id].b && Boolean(body);
+        // Fill in the copy of the post, so a bar still has its words once
+        // Teams has dropped the post from the channel.
+        const body = fullTextOf(row);
+        const missingBody = body.length > (pins[id].b || '').length;
         if (pins[id].x !== subject || (!pins[id].a && authored) || missingBody) {
           pins[id].x = subject;
           if (!pins[id].a && authored) pins[id].a = authored;
@@ -522,15 +563,12 @@
    */
   function applyViewFiltering() {
     let anyArchived = false;
-    let hiddenPinned = 0;
     for (const row of document.querySelectorAll('.tpp-post')) {
       const isArchived = Boolean(row.dataset.tppId && archive[row.dataset.tppId]);
       setTag(row, isArchived ? 'archive' : '');
       paintRow(row, row.dataset.tppNativePin === '1');
       if (isArchived) anyArchived = true;
-      if (row.dataset.tppPinned === '1') hiddenPinned += 1;
     }
-    pinnedHidden = hiddenPinned;
     publishArchivePresence(anyArchived);
   }
 
@@ -576,16 +614,12 @@
   function paintRow(row, nativePinned) {
     const tag = row.dataset.tppTag === 'archive' ? 'archive' : '';
 
-    // A pinned post is shown on its bar at the top, not twice in the stream.
-    // Unpinning clears the mark, which is what puts it back where it belongs.
-    const pinnedNow =
-      Boolean(features.pinnedMessages) &&
-      (Boolean(pins[row.dataset.tppId]) || Boolean(nativePinned));
-    if (pinnedNow) {
-      if (row.dataset.tppPinned !== '1') row.dataset.tppPinned = '1';
-    } else if (row.dataset.tppPinned !== undefined) {
-      delete row.dataset.tppPinned;
-    }
+    // The body is marked so the compact view can clamp it, and a post the user
+    // has opened stays open across Teams re-renders.
+    markBody(row);
+    markHead(row);
+    if (row.dataset.tppId && unfolded.has(row.dataset.tppId)) row.classList.add('tpp-unfold');
+    else row.classList.remove('tpp-unfold');
 
     const painted = [
       tag,
@@ -769,9 +803,17 @@
     const archiveText = isArchived ? 'Unarchive' : 'Archive';
     if (archiveLabel.textContent !== archiveText) archiveLabel.textContent = archiveText;
     archiveBtn.dataset.tppArchived = isArchived ? '1' : '0';
-    archiveBtn.title = isArchived
-      ? 'Unarchive this post and put it back in your Inbox'
-      : 'Archive this post — it moves to your Archive';
+    // A pinned post is the bar's target, so it is never archived from under the
+    // bar: unpinning comes first, and the button says so rather than failing.
+    const cannotArchive =
+      Boolean(features.pinnedMessages) &&
+      (Boolean(pins[row.dataset.tppId]) || Boolean(nativePinned));
+    archiveBtn.disabled = cannotArchive && !isArchived;
+    archiveBtn.title = cannotArchive && !isArchived
+      ? 'Unpin this post first — a pinned post cannot be archived'
+      : isArchived
+        ? 'Unarchive this post and put it back in your Inbox'
+        : 'Archive this post — it moves to your Archive';
     archiveBtn.setAttribute('aria-label', archiveBtn.title);
     archiveBtn.classList.toggle('is-on', isArchived);
 
@@ -815,19 +857,29 @@
     pinBtn.classList.toggle('is-on', locallyPinned || nativePinned);
   }
 
+  /** True while this post is pinned, by the user or by a moderator. */
+  function isPinnedPost(id) {
+    if (!id) return false;
+    if (pins[id]) return true;
+    const row = findRow(id);
+    return Boolean(row && row.dataset.tppNativePin === '1');
+  }
+
   function setArchived(id, wantArchived) {
     if (!id) return;
+
+    // A pinned post is the target of its bar, so it is never archived from
+    // under the bar: unpinning comes first.
+    if (wantArchived && isPinnedPost(id)) {
+      toast('Unpin this post first — a pinned post cannot be archived.', anchorFor(id));
+      return;
+    }
     // The post is about to be hidden (or shown again), so the message keeps
     // hold of where it was: the news belongs on the post itself.
     const where = anchorFor(id);
 
     if (wantArchived) {
       archive[id] = { t: Date.now() };
-      // A pinned bar for an archived post would point at nothing in the Inbox.
-      if (pins[id]) {
-        delete pins[id];
-        savePinsSoon();
-      }
     } else {
       delete archive[id];
     }
@@ -836,7 +888,6 @@
     // Answer the click at once: Teams can re-render the row before the next
     // scan, and a button that appears to do nothing is worse than a stale row.
     paintArchived(id, wantArchived);
-    closePinModal();
     scan();
     toast(
       wantArchived ? 'Archived — hidden from your Inbox.' : 'Unarchived — back in your Inbox.',
@@ -851,22 +902,24 @@
 
     if (pins[id]) {
       delete pins[id];
-      message = 'Unpinned — back in its place in the channel.';
+      message = 'Unpinned — it can be archived again.';
     } else {
       const record = rowsById.get(id);
+      const row = record?.row || null;
       pins[id] = {
-        x: (record ? subjectOf(record.row) : '') || record?.text || '',
+        x: (row ? subjectOf(row) : '') || record?.text || '',
         a: record?.author || '',
-        // The words, kept so an opened bar still has them before the post is
-        // loaded into the channel.
-        b: record ? previewOf(record.row).slice(0, 1200) : '',
-        t: Date.now()
+        // The whole post, kept with the pin: Teams only holds the posts it has
+        // rendered, so an old pin can outlive its post in the channel, and this
+        // copy is what the pin shows then.
+        b: fullTextOf(row),
+        t: Date.now(),
+        at: record?.ts || 0
       };
-      message = 'Pinned — it now sits above the channel.';
+      message = 'Pinned — the bar at the top jumps to it.';
     }
 
     savePinsSoon();
-    closePinModal();
     scan();
     toast(message, where);
   }
@@ -899,10 +952,16 @@
 
     const now = Date.now();
     let added = 0;
+    let keptPinned = 0;
     for (const record of targets) {
       if (archive[record.id]) continue;
+      // A bulk action leaves pinned posts alone too: a pin is taken down by
+      // hand, one at a time, so nobody loses one to a hover control.
+      if (isPinnedPost(record.id)) {
+        keptPinned += 1;
+        continue;
+      }
       archive[record.id] = { t: now };
-      delete pins[record.id];
       added += 1;
     }
 
@@ -918,7 +977,10 @@
     hideGap();
     scan();
     // Not one post's doing, so this message sits in the middle of the list.
-    toast(`Archived ${added} older post${added === 1 ? '' : 's'}.`);
+    toast(
+      `Archived ${added} older post${added === 1 ? '' : 's'}.` +
+        (keptPinned ? ' Pinned posts were left alone.' : '')
+    );
   }
 
   // ------------------------------------------------------------ pinned bars
@@ -975,6 +1037,7 @@
         author: pin.a || '',
         kind: 'user',
         body: pin.b || '',
+        at: pin.at || 0,
         snippet: snippetOf(record?.row, pin.x || record?.text || '')
       });
     }
@@ -992,9 +1055,9 @@
   const pinEntryOf = new WeakMap();
 
   /**
-   * One pinned post: a purple bar that opens the post in a modal. The bar keeps
-   * the whole area compact; the post's text, its replies and the archive/pin
-   * rail are all in the modal, so opening one never pushes the page around.
+   * One pinned post: a purple bar that takes the user to the post where it sits
+   * in the stream. The bar keeps the pinned area compact and never moves or
+   * copies the post, so everything inside it stays Teams' own.
    */
   function pinBar(entry) {
     const item = document.createElement('div');
@@ -1007,8 +1070,7 @@
     bar.type = 'button';
     bar.className = 'tpp-pin-bar';
     bar.dataset.tppUi = 'pin-summary';
-    bar.setAttribute('aria-haspopup', 'dialog');
-    bar.title = 'Open this pinned post';
+    bar.title = 'Jump to this post in the channel';
 
     const title = document.createElement('span');
     title.className = 'tpp-pin-bar-title';
@@ -1026,11 +1088,38 @@
       // The entry is re-read at click time: a scan may have refreshed it since
       // the bar was built.
       const host = event.currentTarget.closest('.tpp-pin-item');
-      openPinModal((host && pinEntryOf.get(host)) || entry, bar);
+      jumpToPin((host && pinEntryOf.get(host)) || entry, bar);
     });
 
+    const unpin = pinUnpinButton(entry);
+    if (unpin) item.append(unpin);
     item.append(bar);
     return item;
+  }
+
+  /**
+   * The bar's own unpin button, on its left: taking a pin down is the thing
+   * people do most from the bar, so it is a click, not a trip to the post.
+   */
+  function pinUnpinButton(entry) {
+    const kind = entry.kind === 'user' ? 'user' : entry.canUnpin ? 'native' : '';
+    if (!kind) return null;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'tpp-pin-unpin';
+    button.dataset.tppUi = 'unpin';
+    button.dataset.tppUnpin = kind;
+    button.title = kind === 'user' ? 'Unpin this post' : 'Unpin this post for everyone';
+    button.setAttribute('aria-label', button.title);
+    button.innerHTML = PIN_FILLED_SVG;
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (kind === 'user') togglePin(entry.id);
+      else unpinNative(entry.id);
+    });
+    return button;
   }
 
   /** Brings an existing bar up to date in place, without rebuilding it. */
@@ -1038,321 +1127,28 @@
     pinEntryOf.set(item, entry);
 
     const title = item.querySelector('.tpp-pin-bar-title');
+    const unpin = item.querySelector('.tpp-pin-unpin');
+    const wantedUnpin = entry.kind === 'user' ? 'user' : entry.canUnpin ? 'native' : '';
+    if ((unpin ? unpin.dataset.tppUnpin : '') !== wantedUnpin) {
+      unpin?.remove();
+      const fresh = pinUnpinButton(entry);
+      if (fresh) item.insertBefore(fresh, item.firstChild);
+    }
+
     const snippet = item.querySelector('.tpp-pin-bar-snippet');
     const nextTitle = `${entry.author ? `${entry.author}: ` : ''}${entry.text || 'Pinned post'}`;
     if (title && title.textContent !== nextTitle) title.textContent = nextTitle;
     if (snippet && snippet.textContent !== (entry.snippet || '')) {
       snippet.textContent = entry.snippet || '';
     }
-
-    // Whether this user may unpin a moderator's post can only be known once
-    // Teams has drawn its own control, which may be after the bar was built.
-    if (pinModal && !pinModal.hidden && modalEntry && pinKey(modalEntry) === pinKey(entry)) {
-      modalEntry = entry;
-      if (!pinModal.querySelector('.tpp-modal-actions .tpp-post-actions')) {
-        paintModalActions(entry);
-      }
-    }
   }
 
-  /** What the modal holds: the post as Teams draws it, or the pin's saved words. */
-  function pinContent(entry) {
-    const row = entry.id ? findRow(entry.id) : null;
-    if (row) return pinCopy(row);
-
-    const fallback = document.createElement('div');
-    fallback.className = 'tpp-pin-fallback';
-    const who = document.createElement('div');
-    who.className = 'tpp-pin-fallback-author';
-    who.textContent = entry.author || '';
-    const text = document.createElement('div');
-    text.className = 'tpp-pin-fallback-body';
-    text.textContent = entry.body || entry.text || '';
-    fallback.append(who, text);
-    return fallback;
-  }
-
-  /**
-   * A stripped copy of one Teams node: our own controls and state are removed,
-   * ids go with them (the same id twice in a document would make the copy and
-   * the original fight over it), and the copied post loses the classes that
-   * make it a stream post so it can never be scanned or filtered as one.
-   */
-  function copyOf(node, isPost) {
-    const copy = node.cloneNode(true);
-    for (const injected of copy.querySelectorAll('.tpp-post-actions, [data-tpp-ui]')) {
-      injected.remove();
-    }
-    copy.classList.remove('tpp-post', 'tpp-post--archived', 'tpp-flash');
-    if (isPost) copy.classList.add('tpp-pin-post-row');
-
-    for (const el of [copy, ...copy.querySelectorAll('*')]) {
-      el.removeAttribute('id');
-      // Strip Teams' own selector anchors so the clone can never be mistaken
-      // for a real post, compose box, or pinned-message marker by any of the
-      // selector-based lookups in the content script or in Teams itself.
-      el.removeAttribute('data-tid');
-      el.removeAttribute('data-mid');
-      el.removeAttribute('data-message-id');
-      el.removeAttribute('data-item-id');
-      for (const name of el.getAttributeNames()) {
-        if (name.startsWith('data-tpp-')) el.removeAttribute(name);
-      }
-    }
-
-    return copy;
-  }
-
-  /**
-   * The replies and comments that belong to a post. Teams keeps them in the
-   * post's thread, so the nearest ancestor that holds this post and no other
-   * one is searched for them. Only those nodes are copied: cloning the whole
-   * thread container would drag Teams' own layout along with it, which made the
-   * page re-render against itself.
-   */
-  function replyNodes(row) {
-    let scope = row.parentElement;
-    for (let depth = 0; scope && scope !== lastList && depth < 4; depth += 1) {
-      if (scope.querySelectorAll('.tpp-post').length > 1) break;
-
-      for (const selector of S.commentRoot || []) {
-        let matches = [];
-        try {
-          matches = Array.from(scope.querySelectorAll(selector));
-        } catch (_) {
-          continue; // A bad selector from a hand edit should not stop the rest.
-        }
-
-        const found = [];
-        for (const el of matches) {
-          if (el === row || el.contains(row) || row.contains(el)) continue;
-          if (el.closest('.tpp-pin-stack')) continue;
-          if (found.some((kept) => kept.contains(el) || el.contains(kept))) continue;
-          found.push(el);
-        }
-        if (found.length) return found;
-      }
-
-      scope = scope.parentElement;
-    }
-    return [];
-  }
-
-  /** The pinned post, followed by its replies, as Teams renders them. */
-  function pinCopy(row) {
-    const wrap = document.createElement('div');
-    wrap.className = 'tpp-pin-post';
-    wrap.append(copyOf(row, true));
-    for (const reply of replyNodes(row)) {
-      const copy = copyOf(reply, false);
-      copy.classList.add('tpp-pin-reply');
-      wrap.append(copy);
-    }
-    return wrap;
-  }
-
-  /**
-   * The rail at the top of the modal: the same archive and pin buttons a post
-   * has in the stream. One of your own pins can be archived (which unpins it
-   * too) or unpinned; a moderator's pin gets no controls unless Teams lets this
-   * user unpin there, in which case the pin takes it down for everyone.
-   */
-  function pinRail(entry) {
-    const rail = document.createElement('div');
-    rail.className = 'tpp-post-actions';
-    rail.dataset.tppUi = 'actions';
-
-    if (entry.kind === 'user') {
-      rail.append(
-        pinControl(
-          'archive',
-          ARCHIVE_SVG,
-          'Archive',
-          'Archive this post and take it off the pinned area',
-          () => setArchived(entry.id, true)
-        ),
-        pinControl(
-          'pin',
-          PIN_FILLED_SVG,
-          'Unpin',
-          'Unpin this post and put it back in the channel',
-          () => togglePin(entry.id)
-        )
-      );
-    } else if (entry.canUnpin) {
-      rail.append(
-        pinControl(
-          'pin',
-          PIN_FILLED_SVG,
-          'Unpin for everyone',
-          'Unpin this post in Teams',
-          () => unpinNative(entry.id)
-        )
-      );
-    }
-
-    return rail.children.length ? rail : null;
-  }
-
-  /** One round button in a pinned post's rail, like the stream's own. */
-  function pinControl(kind, svg, label, title, onClick) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `tpp-post-btn tpp-${kind}-btn`;
-    button.dataset.tppUi = kind;
-    button.innerHTML =
-      '<span class="tpp-post-btn-icon"></span><span class="tpp-post-btn-label"></span>';
-    setButtonIcon(button, kind, svg);
-    button.querySelector('.tpp-post-btn-label').textContent = label;
-    button.title = title;
-    button.setAttribute('aria-label', title);
-    button.classList.toggle('is-on', kind === 'pin');
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      onClick();
-    });
-    return button;
-  }
-
-  // ------------------------------------------------------ pinned post modal
-
-  /** The modal shell, built once and reused. */
-  function ensurePinModal() {
-    if (pinModal && pinModal.isConnected) return pinModal;
-
-    const modal = document.createElement('div');
-    modal.id = MODAL_ID;
-    modal.className = 'tpp-modal';
-    modal.dataset.tppUi = 'pin-modal';
-    modal.hidden = true;
-
-    // The backdrop is its own layer, so a click anywhere beside the card lands
-    // on it and closes the post.
-    const backdrop = document.createElement('div');
-    backdrop.className = 'tpp-modal-backdrop';
-    backdrop.dataset.tppUi = 'pin-modal-backdrop';
-    backdrop.addEventListener('click', closePinModal);
-
-    const card = document.createElement('div');
-    card.className = 'tpp-modal-card';
-    card.setAttribute('role', 'dialog');
-    card.setAttribute('aria-modal', 'true');
-    card.setAttribute('aria-label', 'Pinned post');
-
-    const head = document.createElement('div');
-    head.className = 'tpp-modal-head';
-
-    const actions = document.createElement('div');
-    actions.className = 'tpp-modal-actions';
-
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'tpp-modal-close';
-    close.title = 'Close';
-    close.setAttribute('aria-label', 'Close this pinned post');
-    close.innerHTML = CLOSE_SVG;
-    close.addEventListener('click', closePinModal);
-
-    const body = document.createElement('div');
-    body.className = 'tpp-modal-body';
-
-    head.append(actions, close);
-    card.append(head, body);
-    modal.append(backdrop, card);
-    document.body.append(modal);
-
-    pinModal = modal;
-    return modal;
-  }
-
-  /**
-   * Dresses the modal card in the post's own colours.
-   *
-   * The modal lives at the end of <body>, outside the element Teams hangs its
-   * theme on, so Teams' colour variables can resolve to nothing there and the
-   * card used to read as white text on a white surface in dark mode. The post's
-   * own text colour, and the surface it is drawn on, are read from the row and
-   * copied across instead — which is what makes the modal look the same in
-   * either theme.
-   */
-  function paintModalSurface(card, row) {
-    if (!card) return;
-
-    // A pin whose post Teams has not loaded has no row to read, so the message
-    // list itself is sampled instead: it sits inside Teams' themed tree, so the
-    // card still comes out dark in dark mode and light in light mode.
-    const start = row || lastList || findMessageList();
-    if (!start) {
-      card.style.removeProperty('color');
-      card.style.removeProperty('background-color');
-      return;
-    }
-
-    // The post's own text colour, read from its place in Teams' tree and put on
-    // the panel explicitly: this is what keeps the words readable on the panel's
-    // surface, and what stops the browser handing a popover its own CanvasText.
-    const color = getComputedStyle(start).color;
-    if (color) card.style.setProperty('color', color, 'important');
-
-    // The surface the post is drawn on, from the first ancestor that has one.
-    let surface = '';
-    for (let node = start; node; node = node.parentElement) {
-      const bg = getComputedStyle(node).backgroundColor;
-      if (!bg || bg === 'transparent' || /^rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)$/.test(bg)) {
-        continue;
-      }
-      surface = bg;
-      break;
-    }
-    if (surface) card.style.setProperty('background-color', surface);
-    else card.style.removeProperty('background-color');
-  }
-
-  /** The modal's archive/unpin controls for the post on show. */
-  function paintModalActions(entry) {
-    if (!pinModal) return;
-    const slot = pinModal.querySelector('.tpp-modal-actions');
-    slot.textContent = '';
-    const rail = pinRail(entry);
-    if (rail) slot.append(rail);
-    slot.hidden = !rail;
-  }
-
-  /**
-   * Shows one pinned post.
-   *
-   * A post Teams has loaded is shown as itself: the real post and its thread
-   * are lifted into a centred panel (openLiveModal), so replying, reactions,
-   * "see more" and the replies are Teams' own live controls. A pin Teams has
-   * not loaded has no live post to lift, so it falls back to a copy of the
-   * words kept with the pin.
-   */
-  function openPinModal(entry, opener) {
-    if (!entry) return;
-    closeLiveModal();
-    hideCopyModal();
-
-    modalEntry = entry;
-    modalOpener = opener || null;
-
-    const row = resolveRow(entry);
-    if (row) {
-      try {
-        if (openLiveModal(entry, row)) return;
-      } catch (_) {
-        // A Teams build we cannot lift still gets the copy, not no modal.
-        closeLiveModal();
-      }
-    }
-    openCopyModal(entry);
-  }
+  // ------------------------------------------------------- pinned post jump
 
   /**
    * The post a pin points at. Its id is tried first; if Teams has re-rendered
    * the row since it was tagged, Teams' own id anchors and finally the pin's
-   * own words are used, so a post that is on the page is always lifted rather
-   * than falling back to the read-only copy.
+   * own words are used, so a post that is on the page is always found.
    */
   function resolveRow(entry) {
     if (!entry) return null;
@@ -1380,641 +1176,300 @@
   }
 
   /**
-   * The largest wrapper that holds this post and its thread, and no other post.
-   * That is where Teams keeps the replies and the reply box, so lifting it
-   * keeps every one of the post's own controls.
+   * Takes the user to a pinned post in the channel.
+   *
+   * A pin is a pointer at a post, not a copy of it: the post stays in the
+   * stream, so its bar scrolls to it and flashes it. Nothing about the post is
+   * moved, so its replies, reactions, reply box and menus are Teams' own.
+   *
+   * Teams only keeps the posts it has rendered, so an old pin may not be in the
+   * page at all. Rather than telling the user to scroll and find it, the list is
+   * walked back through its history until the post appears (findPinnedPost).
    */
-  function threadHost(row) {
-    let host = null;
-    for (
-      let node = row.parentElement;
-      node && node !== lastList && node !== document.body;
-      node = node.parentElement
-    ) {
-      if (node.querySelectorAll('.tpp-post').length > 1) break;
-      host = node;
+  function jumpToPin(entry, opener) {
+    if (!entry) return;
+
+    const row = resolveRow(entry);
+    if (row) {
+      revealPost(row);
+      return;
     }
-    return host || row;
+    // A new bar abandons a search already running.
+    if (pinJump) cancelPinSearch();
+    findPinnedPost(entry, opener || null);
   }
 
   /**
-   * Lifts the live post into its panel. Nothing about the post itself is
-   * cloned, moved, restyled or added to: the wrapper keeps Teams' own styles
-   * and its place in the tree and is only positioned over the page. Our own
-   * archive/pin and close bar floats beside the panel, never inside the post,
-   * which is why every control in the post keeps working in Teams' own theme.
+   * Walks the message list through its history until the pin's post is loaded,
+   * then scrolls to it.
+   *
+   * Teams fetches older posts when its list is pushed against the top, so the
+   * walk goes up a screen at a time and lets Teams render each batch before
+   * looking again. Channels can be sorted either way, so it tries downwards as
+   * well, and it puts the list back where the user had it if the post is gone.
    */
-  function openLiveModal(entry, row) {
-    let host = threadHost(row);
-    let saved = saveStyles(host, LIFT_PROPS);
-    const rowSaved = saveStyles(row, BOX_PROPS);
+  /** Resolves once `check` is true, or after `ms` at the latest. */
+  function waitFor(check, ms) {
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const tick = () => {
+        if (check() || Date.now() - started >= ms) {
+          resolve();
+          return;
+        }
+        setTimeout(tick, 60);
+      };
+      tick();
+    });
+  }
 
-    // Stop our own filter hiding the row first, so Teams' own display comes
-    // back rather than a forced one.
-    row.dataset.tppModal = '1';
-    host.dataset.tppModalHost = '1';
-    document.documentElement.setAttribute(MODAL_ATTR, '');
+  /**
+   * Walks the message list through the channel until the pin's post is loaded,
+   * then scrolls to it.
+   *
+   * Teams loads older posts when its list is pushed at its edge, so once the
+   * walk reaches the top it keeps pushing there to ask for the next batch, and
+   * it waits for the list to actually grow instead of for a fixed delay. That
+   * is what lets it reach a post dozens of batches back. A few batches in a row
+   * that bring nothing new end it, and a button in the corner abandons it.
+   */
+  async function findPinnedPost(entry, opener) {
+    const list = lastList || findMessageList();
+    if (!list) {
+      // No list to walk: the pin's own copy is the only thing there is to show.
+      showPinCopy(entry);
+      return;
+    }
 
-    // Teams hides rows it is not showing, so both the row and its wrapper are
-    // given a box before either is measured: a `display: none` panel has
-    // nothing to show and nowhere to sit.
-    forceBox(row);
-    forceBox(host);
+    pinJump = { entry, list, startTop: list.scrollTop, opener };
+    showSearchCancel();
+    toast('Finding that pinned post…');
 
-    // Registered before anything is changed, so if a later step throws, the
-    // catch in openPinModal can still put the page back the way it was.
-    liveModal = { host, row, chrome: null, backdrop: null, saved, rowSaved };
+    // Up first: channels list the newest post last, so older ones are above.
+    if (await walkForPin(entry, list, -1, 20000)) return;
+    if (!pinJump) return; // Cancelled.
 
-    // Only the surface: the post's own colours, inherited from its place in
-    // Teams' tree, are left exactly as they are.
-    paintModalSurface(host, row);
+    // Nothing above, so the channel may be sorted the other way.
+    if (await walkForPin(entry, list, 1, 8000)) return;
+    if (!pinJump) return; // Cancelled.
 
-    const backdrop = document.createElement('div');
-    backdrop.className = 'tpp-modal-backdrop';
-    backdrop.dataset.tppUi = 'pin-backdrop';
-    backdrop.addEventListener('click', closePinModal);
-    // The page behind the panel must not scroll away under it.
-    backdrop.addEventListener('wheel', (event) => event.preventDefault(), { passive: false });
-    backdrop.addEventListener('touchmove', (event) => event.preventDefault(), { passive: false });
+    const startTop = pinJump.startTop;
+    pinJump = null;
+    hideSearchCancel();
+    if (list.isConnected) list.scrollTop = startTop;
+    // Teams will not give the post back, so the pin shows the copy taken when
+    // it was pinned rather than a bar that leads nowhere.
+    showPinCopy(entry);
+  }
 
-    // Our bar: the pin's archive/unpin buttons and a close button. It lives
-    // next to the panel so the post itself is never touched.
-    const chrome = document.createElement('div');
-    chrome.className = 'tpp-live-chrome';
-    chrome.dataset.tppUi = 'pin-chrome';
+  /**
+   * One direction of the search: true when the post was found and revealed,
+   * false when it ran out of history or the user cancelled.
+   */
+  async function walkForPin(entry, list, direction, budgetMs) {
+    const deadline = Date.now() + budgetMs;
+    let idle = 0;
 
-    const rail = pinRail(entry);
-    if (rail) chrome.append(rail);
+    while (pinJump && Date.now() < deadline) {
+      const found = resolveRow(entry);
+      if (found) {
+        pinJump = null;
+        hideSearchCancel();
+        revealPost(found);
+        return true;
+      }
+
+      const before = list.scrollHeight;
+      const step = Math.round(list.clientHeight * 1.5);
+      const atEdge =
+        direction < 0
+          ? list.scrollTop <= 2
+          : list.scrollTop + list.clientHeight >= list.scrollHeight - 2;
+
+      list.scrollTop =
+        direction < 0
+          ? Math.max(0, list.scrollTop - step)
+          : Math.min(list.scrollHeight, list.scrollTop + step);
+
+      // Being at the edge is the request for the next batch, so wait for the
+      // list to grow rather than stepping straight past an empty answer.
+      await waitFor(
+        () => !pinJump || list.scrollHeight > before + 8 || Boolean(resolveRow(entry)),
+        atEdge ? 900 : 400
+      );
+      if (!pinJump) return false;
+
+      if (list.scrollHeight > before + 8) {
+        idle = 0;
+        continue;
+      }
+      if (!atEdge) continue;
+      // A batch can arrive a couple of beats late; six empty ones mean the
+      // channel has no more history to give in this direction.
+      idle += 1;
+      if (idle >= 6) return false;
+    }
+    return false;
+  }
+
+  /** The button that abandons a pinned-post search, bottom centre. */
+  function showSearchCancel() {
+    if (searchCancelBtn) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'tpp-search-cancel';
+    button.dataset.tppUi = 'search-cancel';
+    button.textContent = 'Stop searching for this pin';
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelPinSearch();
+    });
+    document.body.append(button);
+    searchCancelBtn = button;
+  }
+
+  function hideSearchCancel() {
+    searchCancelBtn?.remove();
+    searchCancelBtn = null;
+  }
+
+  /**
+   * A pin's own copy of the post, for when Teams will not load the post itself.
+   *
+   * Every pin keeps the words it was pinned with, so a pin from months back
+   * still shows something to read instead of an apology. The copy is read-only:
+   * the post, its replies and its controls stay Teams' own, and are gone from
+   * the channel, so there is nothing to hand them to.
+   */
+  function showPinCopy(entry) {
+    hidePinCopy();
+
+    const card = document.createElement('div');
+    card.id = PIN_COPY_ID;
+    card.className = 'tpp-pin-copy';
+    card.dataset.tppUi = 'pin-copy';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-label', 'Pinned post copy');
+
+    const head = document.createElement('div');
+    head.className = 'tpp-pin-copy-head';
+
+    const label = document.createElement('span');
+    label.className = 'tpp-pin-copy-label';
+    label.textContent = 'Pinned copy';
 
     const close = document.createElement('button');
     close.type = 'button';
-    close.className = 'tpp-modal-close';
+    close.className = 'tpp-pin-copy-close';
     close.title = 'Close';
-    close.setAttribute('aria-label', 'Close this pinned post');
-    close.innerHTML = CLOSE_SVG;
-    close.addEventListener('click', closePinModal);
-    chrome.append(close);
+    close.setAttribute('aria-label', 'Close');
+    close.textContent = '×';
+    close.addEventListener('click', hidePinCopy);
+    head.append(label, close);
 
-    liftHost(host);
+    const author = document.createElement('div');
+    author.className = 'tpp-pin-copy-author';
+    author.textContent = entry.author || 'Pinned post';
 
-    // A wrapper with no box of its own (a collapsed thread, for instance) gives
-    // way to the post's own row, which then becomes the panel — popover included.
-    if ((!panelHasBox(host) || !rowHasBox(row, host)) && host !== row) {
-      // The wrapper is not showing; the post's own row becomes the panel.
-      restoreHost(host, saved);
-      delete host.dataset.tppModalHost;
+    const text = document.createElement('p');
+    text.className = 'tpp-pin-copy-body';
+    text.textContent = entry.body || entry.snippet || entry.text || '';
 
-      host = row;
-      saved = saveStyles(host, LIFT_PROPS);
-      liveModal.host = host;
-      liveModal.saved = saved;
-      forceBox(host);
-      host.dataset.tppModalHost = '1';
-      paintModalSurface(host, row);
-      liftHost(host);
-    }
+    const note = document.createElement('p');
+    note.className = 'tpp-pin-copy-note';
+    note.textContent =
+      'Teams is no longer loading this post in the channel. This is the copy saved when you pinned it.';
 
-    // Nothing on screen means no panel at all, rather than an invisible one: the
-    // copy the caller falls back to is better than a blank screen.
-    if (!panelHasBox(host) || !rowHasBox(row, host)) {
-      closeLiveModal();
-      return false;
-    }
-
-    liveModal.chrome = chrome;
-    liveModal.backdrop = backdrop;
-
-    // The dim is meant to cover the whole page, so it is lifted with the panel:
-    // left in Teams' tree it was clipped by the channel's own scroll container
-    // and stopped at the edge of the posts. Only the top layer is above every
-    // one of Teams' containers. The three are shown in this order, because a
-    // top-layer element is painted above the ones shown before it: the dim, the
-    // panel, then our bar.
-    //
-    // The panel goes up with it because it has to sit above the dim, which also
-    // puts it outside the clipping and transforms that used to shift it out of
-    // place. Teams' own pickers are lifted after it when they open (see
-    // watchFlyouts), so they still come out on top.
-    document.body.append(backdrop, chrome);
-    if (showPopover(backdrop) && showPopover(host)) {
-      showPopover(chrome);
-    } else {
-      // No Popover API: the dim and the bar sit beside the panel, which keeps
-      // the panel the thing above them.
-      hidePopover(backdrop);
-      const parent = host.parentElement || document.body;
-      parent.insertBefore(backdrop, host);
-      parent.insertBefore(chrome, host);
-    }
-
-    // Placement comes after the promotion, because a top-layer element is
-    // positioned against the window rather than against the ancestor that was
-    // its containing block a moment earlier.
-    liftHost(host);
-    placeLiveChrome();
-    watchPanelSize(host);
-    watchFlyouts();
-    window.addEventListener('resize', recentrePanel);
-    hideGap();
-    close.focus({ preventScroll: true });
-    return true;
+    card.append(head, author, text, note);
+    document.body.append(card);
+    close.focus();
   }
 
-  /** True when the browser has the Popover API (Chrome 114 and later). */
-  function supportsPopover() {
-    return typeof HTMLElement.prototype.showPopover === 'function';
+  function hidePinCopy() {
+    document.getElementById(PIN_COPY_ID)?.remove();
   }
 
-  /** Puts an element in the top layer, above everything else on the page. */
-  function showPopover(el) {
-    if (!el || !supportsPopover()) return false;
-    try {
-      if (el.matches(':popover-open')) return true;
-      el.setAttribute('popover', 'manual');
-      el.showPopover();
-      return true;
-    } catch (_) {
-      // A popover attribute left on a closed element would hide it outright.
-      el.removeAttribute('popover');
-      return false;
-    }
-  }
-
-  /** Takes an element back out of the top layer. */
-  function hidePopover(el) {
-    if (!el) return;
-    try {
-      if (el.matches(':popover-open')) el.hidePopover();
-    } catch (_) {
-      // Already closed, or Chrome without the Popover API.
-    }
-    el.removeAttribute('popover');
-  }
-
-  /**
-   * Teams portals its emoji picker, reaction menu and mention list into <body>,
-   * where they are ordinary page layers — and the panel is in the top layer, so
-   * it covers them. No z-index can reach across that boundary, so a flyout that
-   * opens while a pinned post is on show is lifted into the top layer too,
-   * shown after the panel: it comes out on top, exactly where clicking the emoji
-   * button in the post expects it.
-   */
-  function watchFlyouts() {
-    if (flyoutWatch || typeof MutationObserver !== 'function') return;
-    flyoutWatch = new MutationObserver((records) => {
-      for (const record of records) {
-        for (const node of record.addedNodes) {
-          if (node && node.nodeType === 1) flyoutQueue.push(node);
-        }
-      }
-      if (flyoutFrame || !flyoutQueue.length) return;
-      flyoutFrame = requestAnimationFrame(() => {
-        flyoutFrame = 0;
-        const batch = flyoutQueue;
-        flyoutQueue = [];
-        if (!liveModal) return;
-        const budget = { left: 800 };
-        for (const node of batch) liftFlyoutWithin(node, 0, budget);
-      });
-    });
-    // Portals are added anywhere under <body>, and the callout Teams draws is
-    // usually a child or two down, so the whole body is watched.
-    flyoutWatch.observe(document.body, { childList: true, subtree: true });
-
-    // Teams also keeps some portals in the page and only reveals them with a
-    // style change, which a childList observer never sees. A click — or the
-    // "@" and ":" that open a mention or emoji list — is the moment a picker
-    // opens, so those are swept as well.
-    document.addEventListener('pointerdown', noteFlyoutPoint, true);
-    document.addEventListener('keydown', flyoutSweep, true);
-    flyoutSweep();
-  }
-
-  /** Remembers the click, since a picker opens there, and sweeps for it. */
-  function noteFlyoutPoint(event) {
-    flyoutPoint = { x: event.clientX, y: event.clientY };
-    flyoutSweep(event);
-  }
-
-  /** Sweeps the page for a flyout just after an interaction, then settles. */
-  function flyoutSweep(event) {
-    if (!liveModal) return;
-    if (event && event.type === 'keydown' && event.key !== '@' && event.key !== ':') return;
-    if (flyoutSweepTimer) window.clearTimeout(flyoutSweepTimer);
-    const sweep = (delay, passes) => {
-      flyoutSweepTimer = window.setTimeout(() => {
-        flyoutSweepTimer = 0;
-        liftFlyoutsNow();
-        if (passes > 0 && liveModal) sweep(delay * 2, passes - 1);
-      }, delay);
-    };
-    sweep(40, 3);
-  }
-
-  /** Looks for a flyout anywhere in the page; used after an interaction. */
-  function liftFlyoutsNow() {
-    if (!liveModal) return;
-    // First the picker that opened where the click landed: this finds it by
-    // what is painted there rather than by its z-index or its size, so a picker
-    // Teams keeps low in the page — and one hidden behind the panel — is still
-    // caught. Then a walk of <body> for the portals that are mounted elsewhere.
-    const atClick = flyoutAtPoint();
-    if (atClick) liftFlyout(atClick, true);
-    const budget = { left: 1500 };
-    for (const child of document.body.children) liftFlyoutWithin(child, 0, budget);
-  }
-
-  /**
-   * The layer a flyout was drawn in at the last click. `elementsFromPoint`
-   * returns everything at that point, topmost first — the panel is on top, but
-   * the picker it covers is still in the list, so it can be found and lifted.
-   */
-  function flyoutAtPoint() {
-    if (!flyoutPoint || typeof document.elementsFromPoint !== 'function') return null;
-    let stack = [];
-    try {
-      stack = document.elementsFromPoint(flyoutPoint.x, flyoutPoint.y);
-    } catch (_) {
-      return null;
-    }
-    for (const el of stack) {
-      if (!el || el.nodeType !== 1) continue;
-      if (el === document.body || el === document.documentElement) continue;
-      if (el.dataset.tppUi || el.id === MODAL_ID) continue;
-      if (el.closest('[data-tpp-modal-host]')) continue;
-      if (el.closest('[data-tpp-flyout]') || el.hasAttribute('popover')) continue;
-      const layer = flyoutLayer(el);
-      if (layer) return layer;
-    }
-    return null;
-  }
-
-  /**
-   * The outermost positioned ancestor of `el` below <body>: the element Teams
-   * placed the flyout with, which is the one that has to be lifted. Anything
-   * that holds the post on show is refused, so a page container the click
-   * happened to land on can never be lifted in the picker's place.
-   */
-  function flyoutLayer(el) {
-    let node = el;
-    while (node && node !== document.body) {
-      const css = getComputedStyle(node);
-      if (css.position === 'fixed' || css.position === 'absolute') break;
-      node = node.parentElement;
-    }
-    if (!node || node === document.body) return null;
-
-    let layer = node;
-    for (let up = node.parentElement; up && up !== document.body; up = up.parentElement) {
-      const css = getComputedStyle(up);
-      if (css.position !== 'fixed' && css.position !== 'absolute') break;
-      layer = up;
-    }
-    if (layer.contains(liveModal.host)) return null;
-    // A picker holds no post. Anything that does is part of the stream behind
-    // the panel — another post's wrapper, say — and is never lifted.
-    if (layer.querySelector('.tpp-post')) return null;
-    return layer;
-  }
-
-  /**
-   * Searches one subtree for a flyout and lifts the first it finds. The post on
-   * show is skipped: a picker Teams renders inside it is already above the post
-   * it belongs to, and its own nodes are no flyout of Teams'.
-   */
-  function liftFlyoutWithin(root, depth, budget) {
-    if (!root || root.nodeType !== 1 || budget.left <= 0) return;
-    budget.left -= 1;
-    // One of ours: Teams has closed it if it is no longer open, so it goes back
-    // into the page rather than staying a popover that can never be shown again.
-    if (root.dataset.tppFlyout) {
-      if (!root.matches(':popover-open')) unliftFlyout(root);
+  /** Stops a running search and puts the channel back where it was. */
+  function cancelPinSearch() {
+    if (!pinJump) {
+      hideSearchCancel();
       return;
     }
-    if (root.closest('[data-tpp-flyout]')) return;
-    if (root.dataset.tppUi || root.id === MODAL_ID) return;
-    if (root.hasAttribute('data-tpp-modal-host') || root.hasAttribute('data-tpp-modal')) return;
-    if (liftFlyout(root)) return;
-    if (depth >= FLYOUT_DEPTH) return;
-    for (const child of root.children) liftFlyoutWithin(child, depth + 1, budget);
-  }
-
-  /** Lifts one Teams flyout into the top layer, if that is what this is. */
-  function liftFlyout(el, forced) {
-    if (!el || el.nodeType !== 1 || el.dataset.tppFlyout) return false;
-    if (el.dataset.tppUi || el.id === MODAL_ID) return false;
-    if (el.hasAttribute('popover') || !supportsPopover()) return false;
-    if (el.closest('[data-tpp-modal-host]')) return false;
-    const rect = el.getBoundingClientRect();
-    const css = getComputedStyle(el);
-    if (css.position !== 'fixed' && css.position !== 'absolute') return false;
-    if (!forced) {
-      // Found by walking the page: a flyout is a positioned layer with a box of
-      // its own that Teams has already sized. The z-index floor keeps tooltips
-      // and live regions out; the box keeps zero-size wrappers out.
-      if (rect.width < 80 || rect.height < 40) return false;
-      const z = Number.parseInt(css.zIndex, 10);
-      if (!Number.isFinite(z) || z < 1000) return false;
-    } else if (rect.width < 4 || rect.height < 4) {
-      return false;
-    }
-
-    // The browser's popover frame is `inset: 0; margin: auto` against the
-    // window. Teams' own top/left are inline and still win, but the right and
-    // bottom that frame adds would stretch the flyout, so those, the margin and
-    // the animation's transform are cleared for as long as it is lifted.
-    const saved = saveStyles(el, FLYOUT_PROPS);
-    el.style.setProperty('position', 'fixed');
-    el.style.setProperty('right', 'auto');
-    el.style.setProperty('bottom', 'auto');
-    el.style.setProperty('margin', '0');
-    el.style.setProperty('transform', 'none');
-    if (!showPopover(el)) {
-      restoreHost(el, saved);
-      return false;
-    }
-    flyoutSaved.set(el, saved);
-    el.dataset.tppFlyout = '1';
-
-    // Where it lands may not be where Teams had it — a centred flyout placed by
-    // a transform, or one measured against a positioned ancestor, moves once it
-    // is in the top layer. If it did, it is pinned to the box that was measured
-    // before it was lifted, so it opens exactly where clicking expects it.
-    const after = el.getBoundingClientRect();
-    if (Math.abs(after.left - rect.left) > 1 || Math.abs(after.top - rect.top) > 1) {
-      setImportant(el, 'top', `${Math.round(rect.top)}px`);
-      setImportant(el, 'left', `${Math.round(rect.left)}px`);
-      setImportant(el, 'right', 'auto');
-      setImportant(el, 'bottom', 'auto');
-      setImportant(el, 'transform', 'none');
-    }
-    if (Math.abs(after.width - rect.width) > 1) {
-      setImportant(el, 'width', `${Math.round(rect.width)}px`);
-    }
-    if (Math.abs(after.height - rect.height) > 1) {
-      setImportant(el, 'height', `${Math.round(rect.height)}px`);
-    }
-    return true;
-  }
-
-  /** Takes one flyout back out of the top layer and gives its styles back. */
-  function unliftFlyout(el) {
-    hidePopover(el);
-    delete el.dataset.tppFlyout;
-    const saved = flyoutSaved.get(el);
-    if (saved) restoreHost(el, saved);
-    flyoutSaved.delete(el);
-  }
-
-  /** Puts Teams' flyouts back in the page when the panel closes. */
-  function endFlyouts() {
-    flyoutWatch?.disconnect();
-    flyoutWatch = null;
-    if (flyoutFrame) cancelAnimationFrame(flyoutFrame);
-    flyoutFrame = 0;
-    flyoutQueue = [];
-    if (flyoutSweepTimer) window.clearTimeout(flyoutSweepTimer);
-    flyoutSweepTimer = 0;
-    document.removeEventListener('pointerdown', noteFlyoutPoint, true);
-    document.removeEventListener('keydown', flyoutSweep, true);
-    flyoutPoint = null;
-    for (const el of document.querySelectorAll('[data-tpp-flyout]')) unliftFlyout(el);
-    flyoutSaved.clear();
+    const { list, startTop } = pinJump;
+    pinJump = null;
+    hideSearchCancel();
+    if (list && list.isConnected) list.scrollTop = startTop;
+    toast('Search stopped.');
   }
 
   /**
-   * Parks our bar in the left margin, level with the top of the panel — the
-   * same place a post's buttons sit in the stream. When there is no room there,
-   * it goes to the right of the panel instead.
-   */
-  function placeLiveChrome() {
-    if (!liveModal || !liveModal.chrome) return;
-    const rect = liveModal.host.getBoundingClientRect();
-    if (rect.width < 8) return;
-
-    const width = 40;
-    const gap = 10;
-    let left = rect.left - width - gap;
-    if (left < 8) left = rect.right + gap;
-
-    // Important, so the popover frame's own inset rules cannot take these back
-    // when the bar shares the panel's top layer.
-    setImportant(liveModal.chrome, 'left', `${Math.max(8, Math.min(left, window.innerWidth - width - 8))}px`);
-    setImportant(liveModal.chrome, 'width', `${width}px`);
-    setImportant(liveModal.chrome, 'top', `${Math.max(8, rect.top)}px`);
-  }
-
-  /**
-   * Places the panel in the centre of the page. The geometry goes on with
-   * inline `!important` styles so no Teams rule or inline style can take it
-   * back, and only position and size are set: everything about how the post
-   * looks — colours, type, spacing, the theme — stays Teams' own.
+   * Takes the eye to one post: the list eases to it, then it flashes.
    *
-   * The size is measured before the centre is worked out, so a post that has
-   * grown since it opened ("see more", an open reply box) is centred on the
-   * size it has now rather than the size it had then.
+   * An archived post is shown first, because the Inbox filter hides it and there
+   * is nothing to scroll to while it is hidden.
    */
-  function liftHost(host) {
-    const width = Math.min(760, Math.max(240, window.innerWidth - 140));
-    const maxHeight = Math.min(
-      Math.round(window.innerHeight * 0.86),
-      window.innerHeight - 24,
-      920
-    );
+  function revealPost(row) {
+    const id = row.dataset.tppId;
+    if (id && archive[id] && view !== VIEW_ARCHIVES) setView(VIEW_ARCHIVES);
 
-    setImportant(host, 'position', 'fixed');
-    setImportant(host, 'top', '12px');
-    setImportant(host, 'left', '12px');
-    setImportant(host, 'right', 'auto');
-    setImportant(host, 'bottom', 'auto');
-    setImportant(host, 'width', `${width}px`);
-    setImportant(host, 'height', 'auto');
-    setImportant(host, 'max-height', `${maxHeight}px`);
-    setImportant(host, 'margin', '0');
-    setImportant(host, 'overflow', 'auto');
-    setImportant(host, 'box-sizing', 'border-box');
-    setImportant(host, 'transform', 'none');
-    setImportant(host, 'z-index', '999001');
-    setImportant(host, 'min-width', '0');
-    // Teams sometimes caps a row's width; the panel is sized here, not there.
-    setImportant(host, 'max-width', 'none');
-
-    // A `display: contents` wrapper has no box to position, so it gets one.
-    const display = getComputedStyle(host).display;
-    if (display === 'contents' || display === 'inline') setImportant(host, 'display', 'block');
-
-    // Centre on the height the post actually takes, which max-height may cap.
-    const height = Math.min(host.getBoundingClientRect().height || 0, maxHeight);
-    let top = Math.max(12, Math.round((window.innerHeight - height) / 2));
-    let left = Math.max(12, Math.round((window.innerWidth - width) / 2));
-    setImportant(host, 'top', `${top}px`);
-    setImportant(host, 'left', `${left}px`);
-
-    // A transformed ancestor makes top/left relative to that ancestor instead
-    // of the window. Nudge by the visual difference until the panel really is
-    // where it should be; that correction settles after a pass or two.
-    for (let pass = 0; pass < 3; pass += 1) {
-      const rect = host.getBoundingClientRect();
-      const dx = left - rect.left;
-      const dy = top - rect.top;
-      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) break;
-      left += Math.round(dx);
-      top += Math.round(dy);
-      setImportant(host, 'left', `${left}px`);
-      setImportant(host, 'top', `${top}px`);
-    }
-
-    return { width, left, top };
-  }
-
-  /**
-   * "See more" and the reply box make the post grow, and a taller post has a
-   * different centre, so the panel is re-centred on its own size whenever that
-   * size changes — and on a window resize, since it is sized in window units.
-   */
-  function watchPanelSize(host) {
-    if (typeof ResizeObserver !== 'function') return;
-    panelObserver = new ResizeObserver(() => {
-      if (recentring) return;
-      recentring = true;
-      requestAnimationFrame(() => {
-        recentring = false;
-        recentrePanel();
-      });
+    scrollPostToCentre(row, () => {
+      flashPost((id && findRow(id)) || row);
     });
-    panelObserver.observe(host);
-  }
-
-  function stopPanelWatch() {
-    panelObserver?.disconnect();
-    panelObserver = null;
-    recentring = false;
-  }
-
-  function recentrePanel() {
-    if (!liveModal) return;
-    liftHost(liveModal.host);
-    placeLiveChrome();
-  }
-
-  /** Saves the inline values of `props` so they can be put back later. */
-  function saveStyles(el, props) {
-    return props.map((prop) => [
-      prop,
-      el.style.getPropertyValue(prop),
-      el.style.getPropertyPriority(prop)
-    ]);
   }
 
   /**
-   * Teams hides rows it is not showing, and our own stylesheet hides a pinned
-   * row, so the post and its wrapper are given a box before they are measured.
+   * Scrolls a post to the middle of the list over a handful of frames.
+   *
+   * Jumping straight to the post is disorienting: it is simply there, with no
+   * sign that the bar went anywhere, and an eye that was elsewhere misses it.
+   * Easing the list makes the move visible, and each frame re-measures how far
+   * the post still is from the middle, so it settles on the right place whatever
+   * Teams' virtualisation did to the row on the way.
    */
-  function forceBox(el) {
-    const css = getComputedStyle(el);
-    if (css.display === 'none') setImportant(el, 'display', 'block');
-    if (css.visibility !== 'visible') setImportant(el, 'visibility', 'visible');
-    setImportant(el, 'content-visibility', 'visible');
-  }
-
-  /** True when the panel actually has something on screen to show. */
-  function panelHasBox(el) {
-    const rect = el.getBoundingClientRect();
-    if (rect.width < 120 || rect.height < 16) return false;
-    if (collapse(el.innerText || el.textContent || '')) return true;
-    return Boolean(el.querySelector('img, video, [role="img"]'));
-  }
-
-  /** True when the post itself is laid out inside the panel. */
-  function rowHasBox(row, host) {
-    if (row === host) return panelHasBox(row);
-    const rect = row.getBoundingClientRect();
-    return rect.width >= 80 && rect.height >= 16;
-  }
-
-  /** Puts a wrapper's own inline styles back when the panel closes. */
-  function restoreHost(host, saved) {
-    for (const [prop, value, priority] of saved) {
-      if (value) host.style.setProperty(prop, value, priority);
-      else host.style.removeProperty(prop);
-    }
-  }
-
-  function setImportant(node, prop, value) {
-    if (
-      node.style.getPropertyValue(prop) === value &&
-      node.style.getPropertyPriority(prop) === 'important'
-    ) {
+  function scrollPostToCentre(row, done) {
+    const list = lastList || findMessageList();
+    if (!list) {
+      try {
+        row.scrollIntoView({ block: 'center', inline: 'nearest' });
+      } catch (_) {
+        // No list to walk: the flash alone has to do.
+      }
+      done();
       return;
     }
-    node.style.setProperty(prop, value, 'important');
+
+    let frames = 0;
+
+    const step = () => {
+      frames += 1;
+      const rect = row.getBoundingClientRect();
+      const listRect = list.getBoundingClientRect();
+      const delta = rect.top - listRect.top - (list.clientHeight - rect.height) / 2;
+
+      if (Math.abs(delta) > 2 && frames < 90 && row.isConnected) {
+        // 0.16 of the remaining distance per frame: about half a second of
+        // travel, quicker over a long drop than over a short one.
+        list.scrollTop += delta * 0.16;
+        requestAnimationFrame(step);
+        return;
+      }
+      done();
+    };
+
+    step();
   }
 
-  function closeLiveModal() {
-    if (!liveModal) return;
-    const { host, row, chrome, backdrop, saved, rowSaved } = liveModal;
-    liveModal = null;
+  /** Flashes one post, so the eye lands on the post the bar stood for. */
+  function flashPost(row) {
+    if (!row) return;
 
-    stopPanelWatch();
-    endFlyouts();
-    window.removeEventListener('resize', recentrePanel);
-    hidePopover(host);
-    hidePopover(chrome);
-    hidePopover(backdrop);
+    row.classList.remove('tpp-flash');
+    void row.offsetWidth; // Restart the animation when the same post is clicked twice.
+    row.classList.add('tpp-flash');
 
-    restoreHost(host, saved);
-    if (rowSaved) restoreHost(row, rowSaved);
-    chrome?.remove();
-    backdrop?.remove();
-    delete host.dataset.tppModalHost;
-    delete row.dataset.tppModal;
-    document.documentElement.removeAttribute(MODAL_ATTR);
-  }
-
-  /** The copy shown for a pin whose post Teams has not loaded. */
-  function openCopyModal(entry) {
-    const modal = ensurePinModal();
-    paintModalSurface(modal.querySelector('.tpp-modal-card'), null);
-
-    const body = modal.querySelector('.tpp-modal-body');
-    body.textContent = '';
-    body.append(pinContent(entry));
-    body.scrollTop = 0;
-
-    paintModalActions(entry);
-    document.documentElement.setAttribute(MODAL_ATTR, '');
-    hideGap();
-    modal.hidden = false;
-    modal.querySelector('.tpp-modal-close').focus({ preventScroll: true });
-  }
-
-  function hideCopyModal() {
-    if (!pinModal || pinModal.hidden) return;
-    pinModal.hidden = true;
-    pinModal.querySelector('.tpp-modal-body').textContent = '';
-  }
-
-  function closePinModal() {
-    const opener = modalOpener;
-    const wasOpen = Boolean(liveModal) || Boolean(pinModal && !pinModal.hidden);
-    modalOpener = null;
-    modalEntry = null;
-
-    closeLiveModal();
-    hideCopyModal();
-    document.documentElement.removeAttribute(MODAL_ATTR);
-
-    if (!wasOpen || !opener || !opener.isConnected || opener.offsetParent === null) return;
-    try {
-      opener.focus({ preventScroll: true });
-    } catch (_) {
-      // Focus is a nicety; the post is closed either way.
-    }
-  }
-
-  /** True while a pinned post is open, live or as a copy. */
-  function modalOpen() {
-    return Boolean(liveModal) || Boolean(pinModal && !pinModal.hidden);
+    window.clearTimeout(flashTimer);
+    flashTimer = window.setTimeout(() => row.classList.remove('tpp-flash'), 1900);
   }
 
   /**
@@ -2060,16 +1515,6 @@
     const existing = document.getElementById(STACK_ID);
     const entries =
       features.pinnedMessages && view === VIEW_INBOX ? buildPinEntries() : [];
-
-    // A post Teams has taken out of the page has nothing left to show.
-    if (liveModal && !liveModal.row.isConnected) closePinModal();
-
-    // A post whose pin went away — unpinned, archived, or another view — has
-    // nothing left to show, so its modal closes with it.
-    if (pinModal && !pinModal.hidden) {
-      const key = modalEntry ? pinKey(modalEntry) : '';
-      if (!entries.some((entry) => pinKey(entry) === key)) closePinModal();
-    }
 
     if (!list || entries.length === 0) {
       existing?.remove();
@@ -2268,7 +1713,6 @@
     const control = unpinAffordance(row);
     if (control) {
       control.click();
-      closePinModal();
       toast('Asked Teams to unpin this post.', where);
       return;
     }
@@ -2362,6 +1806,13 @@
     const skins = posts ? tabSkins(posts) : null;
 
     for (const button of wrap.querySelectorAll('.tpp-tab')) {
+      // The compact switch is not a view: it only carries a pressed state.
+      if (button.classList.contains('tpp-compact-toggle')) {
+        button.classList.toggle('is-on', Boolean(features.compactPosts));
+        button.setAttribute('aria-pressed', features.compactPosts ? 'true' : 'false');
+        continue;
+      }
+
       const active = view === button.dataset.mode;
       if (skins) {
         skinTab(button, active ? skins.selected : skins.idle, active);
@@ -2411,6 +1862,35 @@
   }
 
   /**
+   * The compact switch, beside the tabs: the same control the popup has, put
+   * where the posts are so it can be flipped while looking at them. It writes
+   * through the feature registry, so the popup and the other devices follow.
+   */
+  function compactToggle() {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'tpp-tab tpp-compact-toggle';
+    button.dataset.tppUi = 'compact-toggle';
+    button.title = 'Compact posts: one line of text per post';
+    button.setAttribute('aria-label', button.title);
+    button.innerHTML = COMPACT_SVG;
+
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setFeature('compactPosts', !features.compactPosts);
+    });
+    return button;
+  }
+
+  /** Flips one feature and writes it to sync storage, exactly as the popup does. */
+  function setFeature(id, value) {
+    features = { ...features, [id]: Boolean(value) };
+    writeSync({ [STORAGE_KEY]: features });
+    apply();
+  }
+
+  /**
    * The pair. Each tab is a copy of Teams' own Posts tab (see cloneTab), so the
    * strip's type, padding, height, colour and selected bar come from Teams and
    * follow a theme change without anything being hard-coded here.
@@ -2447,6 +1927,7 @@
       wrap.append(button);
     }
 
+    wrap.append(compactToggle());
     return wrap;
   }
 
@@ -2869,8 +2350,7 @@
       !features ||
       !features.inboxZero ||
       view !== VIEW_INBOX ||
-      !listRect ||
-      modalOpen()
+      !listRect
     ) {
       hideGap();
       return;
@@ -3030,17 +2510,58 @@
       const message = document.getElementById(TOAST_ID);
       if (message) placeToast(message);
 
-      if (liveModal && liveModal.chrome) {
-        if (!liveModal.host.isConnected) closePinModal();
-        else {
-          liftHost(liveModal.host);
-          placeLiveChrome();
-        }
-      }
-
       refreshGapZones();
       hideGap();
     });
+  }
+
+  // ------------------------------------------------------ which channel this is
+
+  /**
+   * The channel a pin belongs to.
+   *
+   * Teams names the channel in its own path — /l/channel/<id>/<name>, or
+   * /l/chat/<id> for a chat — so the path is the namespace: a pin made in one
+   * channel stays out of the next, and a chat's pins stay out of both.
+   */
+  function channelKey() {
+    const path = String(location.pathname || '').replace(/\/+$/, '');
+    return path ? path.slice(0, 220) : 'teams';
+  }
+
+  /** The current channel's bucket, created on first use. */
+  function pinsFor(channel) {
+    if (!pinsAll[channel] || typeof pinsAll[channel] !== 'object') pinsAll[channel] = {};
+    return pinsAll[channel];
+  }
+
+  /**
+   * Moves `pins` to whichever channel is on screen. Teams changes channels
+   * without a page load, so this is checked on every scan.
+   */
+  function syncPinChannel() {
+    const channel = channelKey();
+    if (channel === pinChannel) return false;
+    pinChannel = channel;
+    pins = pinsFor(channel);
+    return true;
+  }
+
+  /**
+   * The post's whole text, kept with a pin.
+   *
+   * Teams holds only the posts it has rendered, so a pin can outlive the post in
+   * the channel's history. This snapshot is what lets the pin still show the
+   * post after Teams has stopped loading it.
+   */
+  function fullTextOf(row) {
+    if (!row) return '';
+    const body = first(S.messageBody, row) || row;
+    const clone = body.cloneNode(true);
+    for (const injected of clone.querySelectorAll('[data-tpp-ui], .tpp-post-actions')) {
+      injected.remove();
+    }
+    return collapse(clone.textContent || '').slice(0, 2000);
   }
 
   // -------------------------------------------------------------- persistence
@@ -3049,7 +2570,7 @@
     clearTimeout(archiveSaveTimer);
     archiveSaveTimer = setTimeout(() => {
       archiveSaveTimer = 0;
-      persist(ARCHIVE_KEY, archive, ARCHIVE_LIMIT);
+      persistArchive();
     }, 200);
   }
 
@@ -3057,25 +2578,46 @@
     clearTimeout(pinsSaveTimer);
     pinsSaveTimer = setTimeout(() => {
       pinsSaveTimer = 0;
-      persist(PINS_KEY, pins, PIN_LIMIT);
+      persistPins();
     }, 200);
   }
 
-  async function persist(key, map, limit) {
-    let trimmed = Object.fromEntries(Object.entries(map).slice(-limit));
-    if (key === ARCHIVE_KEY) archive = trimmed;
-    else pins = trimmed;
+  async function persistArchive() {
+    let trimmed = Object.fromEntries(Object.entries(archive).slice(-ARCHIVE_LIMIT));
+    archive = trimmed;
 
-    if (await writeSync({ [key]: trimmed })) return;
+    if (await writeSync({ [ARCHIVE_KEY]: trimmed })) return;
 
     // Per-item quota: keep only the newest quarter and try once more rather
     // than silently losing the change.
     trimmed = Object.fromEntries(
-      Object.entries(trimmed).slice(-Math.max(10, Math.floor(limit / 4)))
+      Object.entries(trimmed).slice(-Math.max(10, Math.floor(ARCHIVE_LIMIT / 4)))
     );
-    if (key === ARCHIVE_KEY) archive = trimmed;
-    else pins = trimmed;
-    await writeSync({ [key]: trimmed });
+    archive = trimmed;
+    await writeSync({ [ARCHIVE_KEY]: trimmed });
+  }
+
+  /**
+   * Writes every channel's pins, trimmed to the newest pins in the newest
+   * channels, so one busy channel cannot spend the sync quota and push out the
+   * pins of a channel the user is still working in.
+   */
+  async function persistPins() {
+    const channel = channelKey();
+    pinsAll[channel] = pins;
+
+    let trimmed = normalizePins(pinsAll, PIN_LIMIT, PIN_CHANNEL_LIMIT);
+    pinsAll = trimmed;
+    pins = pinsFor(channel);
+
+    if (await writeSync({ [PINS_KEY]: trimmed })) return;
+
+    // Per-item quota: keep the newest quarter of this channel's pins and try
+    // once more rather than silently losing the change.
+    const keep = Math.max(10, Math.floor(PIN_LIMIT / 4));
+    trimmed[channel] = Object.fromEntries(Object.entries(pins).slice(-keep));
+    pins = pinsFor(channel);
+    await writeSync({ [PINS_KEY]: trimmed });
   }
 
   // ------------------------------------------------------------- placeholders
@@ -3097,7 +2639,7 @@
     for (const el of list.querySelectorAll(selectors.join(','))) {
       // A skeleton inside a real post (a link card still loading) is that
       // post's own business, not a stand-in row.
-      if (el.closest('.tpp-post, .tpp-modal')) continue;
+      if (el.closest('.tpp-post')) continue;
 
       // The shimmer sits somewhere inside a blank block: hide the block, not
       // just the bar, but never climb as far as the list itself.
@@ -3115,6 +2657,19 @@
   function scan() {
     if (!ready) return;
 
+    // Teams swaps channels in place, and a pin belongs to its channel: the
+    // bars have to move to the new channel's pins before anything is drawn.
+    syncPinChannel();
+
+    // A reply box that our own styles were put into by an earlier match is
+    // given back before this scan looks for the list again.
+    for (const el of document.querySelectorAll('.tpp-list')) {
+      if (!isComposeField(el)) continue;
+      el.classList.remove('tpp-list');
+      clearLeftInset(el);
+      clearTopInset(el);
+    }
+
     const list = findMessageList();
 
     // Our own overlays and buttons must not re-trigger the observer.
@@ -3124,7 +2679,6 @@
         for (const id of [STACK_ID, EMPTY_ID, GAP_ID]) {
           document.getElementById(id)?.remove();
         }
-        closePinModal();
         // The tabs live in the channel's own tab strip, so they survive a scan
         // that finds no list; renderTabs drops them once that strip is gone.
         renderTabs(null);
@@ -3160,7 +2714,7 @@
 
       // Filtered posts out of the list can look like the end of its history;
       // the same filler keeps that from pulling in the whole channel.
-      if ((features.inboxZero && view === VIEW_ARCHIVES) || pinnedHidden > 0) {
+      if (features.inboxZero && view === VIEW_ARCHIVES) {
         holdListDepth(list);
       } else {
         releaseListDepth();
@@ -3213,12 +2767,7 @@
     }
 
     if (!features.pinnedMessages) {
-      closePinModal();
       document.getElementById(STACK_ID)?.remove();
-      for (const el of document.querySelectorAll('.tpp-post[data-tpp-pinned]')) {
-        delete el.dataset.tppPinned;
-      }
-      pinnedHidden = 0;
     }
 
     if (!features.inboxZero && !features.pinnedMessages) clearLeftInset();
@@ -3236,7 +2785,19 @@
 
     features = normalize(items[STORAGE_KEY]);
     archive = normalizeMap(items[ARCHIVE_KEY], ARCHIVE_LIMIT);
-    pins = normalizeMap(items[PINS_KEY], PIN_LIMIT);
+
+    const storedPins = items[PINS_KEY];
+    pinsAll = normalizePins(storedPins, PIN_LIMIT, PIN_CHANNEL_LIMIT);
+    pinChannel = channelKey();
+    if (isLegacyPins(storedPins)) {
+      // Pins from before pins were per channel name no channel. They were made
+      // somewhere, and the channel the user is in is the one that adopts them.
+      pinsAll[pinChannel] = normalizeMap(storedPins, PIN_LIMIT);
+      pins = pinsFor(pinChannel);
+      savePinsSoon();
+    } else {
+      pins = pinsFor(pinChannel);
+    }
     view = normalizeView(items[VIEW_KEY]);
     ready = true;
     apply();
@@ -3266,17 +2827,16 @@
       attributeFilter: FEATURES.map((feature) => feature.attr)
     });
 
+    document.addEventListener('click', onPostClick, true);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') hidePinCopy();
+    });
     window.addEventListener('scroll', reposition, { passive: true, capture: true });
     window.addEventListener('resize', reposition);
 
     // The gap control follows the pointer, so only a mousemove can reveal it.
     document.addEventListener('mousemove', onPointerMove, { passive: true });
     document.addEventListener('mouseleave', hideGap);
-
-    document.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape') return;
-      closePinModal();
-    });
 
     bootstrap();
   }
@@ -3286,7 +2846,10 @@
     if (area !== 'sync' || !ready) return;
     if (changes[STORAGE_KEY]) features = normalize(changes[STORAGE_KEY].newValue);
     if (changes[ARCHIVE_KEY]) archive = normalizeMap(changes[ARCHIVE_KEY].newValue, ARCHIVE_LIMIT);
-    if (changes[PINS_KEY]) pins = normalizeMap(changes[PINS_KEY].newValue, PIN_LIMIT);
+    if (changes[PINS_KEY]) {
+      pinsAll = normalizePins(changes[PINS_KEY].newValue, PIN_LIMIT, PIN_CHANNEL_LIMIT);
+      pins = pinsFor(channelKey());
+    }
     if (changes[VIEW_KEY]) view = normalizeView(changes[VIEW_KEY].newValue);
     if (features) apply();
   });

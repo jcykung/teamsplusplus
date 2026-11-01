@@ -2,6 +2,6 @@
 *.zip
 node_modules/
 
-# Local verification harnesses and screenshots (not shipped)
-_harness_*.html
-_shot_*.png
+# Local verification harnesses and screenshots (not shipped). Kept in dev/
+# because Chrome refuses to load an extension whose files start with "_".
+dev/

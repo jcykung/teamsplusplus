@@ -24,30 +24,98 @@
       'div[role="log"]'
     ],
 
-    /** A single post row. Nested matches are collapsed to the outermost row. */
+    /**
+     * A single post row. Nested matches are collapsed to the outermost row, so
+     * an id-bearing message container wins over the body inside it.
+     */
     messageRow: [
+      '[data-tid="post-message"]',
       '[data-tid="chat-pane-message"]',
+      '[data-tid="channel-pane-message"]',
       '[data-tid="message-pane-list-message"]',
       '[data-tid="message-pane-list-message-body"]',
+      '[data-mid]',
+      '[data-message-id]',
       '[data-tid="message-body"]'
     ],
 
+    /**
+     * Teams' own shimmer placeholders while it fetches more posts: a blank
+     * avatar and grey text bars. Never a post, and taken out of the layout on a
+     * filtered view (markLoadingRows in content.js).
+     */
+    loadingRow: [
+      '[data-tid*="skeleton" i]',
+      '[data-tid*="loading" i]',
+      '[data-tid*="placeholder" i]',
+      '[class*="skeleton" i]'
+    ],
+
+    /**
+     * Header markers, one per post. Teams renders `post-message-subheader` for a
+     * post and a different prefix (`comment-message-*`) for comments, so the
+     * first selector below is what tells a post container from everything else.
+     * The post container itself carries no stable attribute, so it is found by
+     * climbing from this marker (see headerRows in content.js).
+     */
+    postHeader: ['[data-tid="post-message-subheader"]'],
+
     /** Text containers. Used to read the post and to avoid UI false positives. */
     messageBody: [
+      '[data-tid="post-message-body"]',
       '[data-tid="message-body"]',
       '[data-tid="messageBodyContent"]',
-      '[data-tid="message-body-content"]'
+      '[data-tid="message-body-content"]',
+      '[id^="content-"]'
     ],
 
     /** Author name, shown before the preview in a pinned bar. */
     messageAuthor: [
+      '[id^="author-"]',
+      '[data-tid="post-message-author"]',
       '[data-tid="message-author"]',
       '[data-tid*="message-author" i]',
       '[data-tid*="author" i]'
     ],
 
-    /** Teams' own pinned-messages pane, when the user has it open. */
+    /**
+     * Ancestors that mean a row is a comment or a reply rather than a post.
+     * Only posts get archive/pin buttons, so matches here are skipped. Teams
+     * prefixes comment markup with `comment-message-*`, which the second entry
+     * catches; the generic `comment` one covers the rest of its variants.
+     */
+    commentRoot: [
+      '[data-tid*="comment" i]',
+      '[data-tid*="reply" i]',
+      '[data-tid*="thread-response" i]',
+      '[class*="replyContainer" i]',
+      '[aria-label*="replies" i][role="list"]'
+    ],
+
+    /** Teams' own "Post in channel" box; the pinned bars sit just above it. */
+    newPostBox: [
+      '[data-tid="post-compose-collapsed"]',
+      '[data-tid="post-compose-collapsed-renderer"]',
+      '[data-tid="compose-start-new-draft"]',
+      '[data-tid*="post-compose" i]',
+      '[data-tid="channel-pane-new-post"]',
+      '[data-tid*="new-post" i]',
+      '[data-tid*="post-in-channel" i]',
+      '[data-tid*="channel-compose" i]',
+      '[contenteditable="true"][aria-label*="Post in channel" i]',
+      '[contenteditable="true"][data-tid*="compose" i]',
+      '[placeholder*="Post in channel" i]'
+    ],
+
+    /**
+     * Teams' own list of pinned posts: the "Pinned" accordion in the "In this
+     * channel" sidebar, or a pinned-messages pane. A post listed here is pinned
+     * for the whole channel (a moderator's pin), which is what makes its bar
+     * unpinnable for a regular user.
+     */
     pinnedPane: [
+      '[data-tid="channel-info-pane-pinned-posts-list"]',
+      '[aria-label="Pinned post list" i]',
       '[data-tid="pinned-messages-pane"]',
       '[data-tid="channel-pane-pinned-messages"]',
       '[data-tid="chat-pane-pinned-messages"]',

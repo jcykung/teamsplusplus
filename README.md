@@ -24,30 +24,77 @@ Access can be revoked at any time from `chrome://extensions` → **Site access**
 
 ### Inbox Zero
 
-Every post gets an **Archive** button at the top. Archiving hides the post from the
-channel, just like moving a read email out of your inbox.
+Every post gets **Archive** and **Pin** buttons in its left margin, kept faint
+until you hover the post. Comments and replies never get them — only the post
+itself can be archived or pinned. The margin they float in is taken out of the
+message list's own left edge, not added to it, so no post moves on screen. Archiving hides the post from the channel, just
+like moving a read email out of your inbox; an archived post keeps only its
+**Unarchive** button, since it is no longer part of the channel view.
 
-- A post comes back automatically when someone replies to it. Teams++ remembers how
-  many replies the thread had when you archived it, and un-hides it when that number
-  grows.
-- Posts you have not archived always stay visible.
+- A post carries no tag until you archive it: archiving tags it **archive**
+  and unarchiving removes the tag again, so an untagged post is an Inbox post.
+  New posts arrive untagged. The Inbox tab shows the untagged posts and the
+  Archive tab the archive-tagged ones, so a post is never in both.
 - When every post in the channel is archived, the empty space shows confetti and an
   **Inbox Zero!** message.
-- A **Show All Posts** button at the bottom switches to the normal Teams view and
-  shows every post. In that view the button becomes **Show Unread Posts** to return
-  to Inbox Zero. Archived posts are marked with a violet edge while shown.
+- **Inbox** and **Archive** sit in the channel tab bar in place of **Posts**,
+  in its style: the Posts tab leaves the layout and the tabs beside it slide over
+  by the width the pair needs, so **Shared**, **Files** and the rest stay put.
+  Posts in Archive keep a violet edge and carry an **Unarchive** button showing
+  a white archive box in a filled purple circle, the same filled treatment a
+  pinned post's pin gets.
+- Hovering the space between two posts draws a purple line and a centred **Archive
+  all older posts** button, which archives every post on the older side of that
+  line in one click. The cut is the timestamp of the older of the two posts either
+  side of the line, so it is right whether the channel lists newest-first or
+  oldest-first, and after you flip that in Teams' settings.
+- If there is nothing archived yet, the Archive tab says so instead of looking
+  broken, and it leaves the channel's list exactly as Teams laid it out. Hiding
+  every post in a virtualised list gives it no height, so it decides it has been
+  scrolled to the end and fetches the channel's whole history; keeping the list
+  in place is what stops an empty Archive from paging through every old post.
+- The tabs carry no count: a number could only ever count the posts Teams has
+  mounted right now, so it would move on its own as the list virtualises.
+- Clicking either tab also asks Teams for the Posts panel, so both of them still
+  work after you have visited Shared, Calendar or another channel tab.
 
 ### Pinned posts
 
-Pinned posts appear in thin bars at the top of the channel.
+Pinned posts sit at the very top of the channel pane, above the **Post in
+channel** box (and at the top even when the composer is docked at the bottom),
+in the page flow, so they take space rather than covering the composer or the
+channel tabs.
 
-- Posts pinned by a channel moderator (Teams' own pins) sit first, in Teams purple.
-- Posts you pin yourself sit below them in a lighter violet.
+- Each pin is a purple bar reading `Author: subject` and the start of the post;
+  clicking it lifts the post and its thread into a modal in the centre of the
+  page, with all of Teams dimmed and blurred behind it. It is the real post, not
+  a copy, so replying, reactions and the replies all work exactly as they do in
+  the stream. The panel re-centres itself as the post grows (**see more**, an
+  open reply box). Clicking outside the card, the white X disc, or Escape closes
+  it, and nothing behind it moves. The card takes the post's own colours, so it
+  reads the same in light and dark mode, and Teams' emoji and reaction pickers
+  open above it.
+- While a post is pinned it is not repeated in the channel list; unpinning drops
+  it back into the stream in its own place in the chronology.
+- Posts pinned for everyone by a channel moderator sit first, then the ones you
+  pinned yourself.
+- The only addition is the archive/pin rail in the left margin of the modal, the
+  same buttons the post carries in the stream, plus the close button.
+- Your own pins offer **Archive** (which unpins and archives the post) and
+  **Unpin** (which puts it back in the channel).
+- A pin belongs to the channel when Teams lists it in the **Pinned** accordion
+  under "In this channel". Such a pin gets no controls at all for a user Teams
+  does not let pin there; someone who may pin gets **Unpin for everyone**, which
+  uses Teams' own unpin control.
+- A pin whose post Teams has not loaded is shown as its author and the words kept
+  with the pin, with the archive/pin rail. There is no live post to lift in that
+  case, so the panel shows only that copy.
 - Multiple pins stack vertically; the stack scrolls if it gets tall.
-- Click a bar to jump to the post. Click the crossed-pin icon on a bar to unpin it
-  (your own pins are removed immediately; Teams pins use Teams' own unpin control
-  when it is available).
-- Every post also has a **Pin** button, so anyone can keep a post at the top.
+- Every post also has a **Pin** button — a filled white pin on Teams purple while
+  pinned, an outline while not — so anyone can keep a post at the top.
+- Status messages (archived, unarchived, pins) are a larger translucent card
+  centred on the post they are about, so the news appears where the change
+  happened. With no single post involved they sit in the middle of the list.
 
 Both features are independent switches in the popup. Archive state, pins and the
 current view are stored in `chrome.storage.sync`, so they follow the user to every
@@ -67,7 +114,7 @@ changelog.html           Timeline of what changed in each version
 changelog.js             Links the changelog back to the welcome screen
 src/shared/features.js   Feature registry + sync-storage keys and helpers
 src/content/selectors.js DOM anchors (message rows, bodies, authors, pins)
-src/content/content.js   Archive/pin buttons, Inbox Zero, confetti, pinned bars
+src/content/content.js   Archive/pin buttons, Inbox/Archive tabs, gaps, pinned bars
 src/content/teams.css    All injected UI, gated by data-tpp-* on <html>
 src/popup/               Popup markup, styling and access/switch logic
 icons/icon*.png          Extension icons — the files manifest.json points at

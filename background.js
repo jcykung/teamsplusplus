@@ -22,6 +22,8 @@ const TEAMS_ORIGINS = [
   'https://teams.live.com/*'
 ];
 const CONTENT_SCRIPT_ID = 'teamspp-content';
+/** Bumped with every change to the content script; see the refresh block below. */
+const CONTENT_VERSION = '0.4.0-modal-2026-11-01.7';
 
 const { DEFAULTS, STORAGE_KEY, VIEW_KEY } = globalThis.TeamsPlusPlus;
 
@@ -115,6 +117,21 @@ if (chrome.permissions && chrome.permissions.onRemoved) {
 if (chrome.permissions && chrome.permissions.onAdded) {
   chrome.permissions.onAdded.addListener(() => syncContentScriptRegistration());
 }
+
+/**
+ * A reload of the extension does not reach the content script already running in
+ * an open Teams tab: the tab keeps the old code until it is refreshed. A build
+ * stamp makes reloading the extension enough — when the stamp is new, open Teams
+ * tabs are refreshed once, so the code actually under test is the code on disk.
+ */
+chrome.storage.local.get('teamsppContentVersion', (items) => {
+  if (chrome.runtime.lastError) return;
+  if (items && items.teamsppContentVersion === CONTENT_VERSION) return;
+  chrome.storage.local.set({ teamsppContentVersion: CONTENT_VERSION }, () => {
+    void chrome.runtime.lastError;
+    reloadTeamsTabs();
+  });
+});
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {

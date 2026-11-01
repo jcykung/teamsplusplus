@@ -23,28 +23,80 @@
 
 /* Inbox Zero: one post, one archive control ------------------------------ */
 
-html[data-tpp-inbox-zero] .tpp-post {
+.tpp-post {
   position: relative !important;
+  /* The buttons sit just outside the post's left edge, so nothing may clip. */
+  overflow: visible !important;
 }
 
-html[data-tpp-inbox-zero] .tpp-archived {
+/*
+ * A post's tag is the whole model: no tag means Inbox, "archive" means
+ * Archives. Hiding is done here rather than with an inline style on the row, so
+ * a Teams re-render cannot put an archived post back in the Inbox (or an
+ * unarchived one in the Archives).
+ */
+html[data-tpp-inbox-zero][data-tpp-view="inbox"] .tpp-post[data-tpp-tag="archive"] {
   display: none !important;
 }
 
-/* Shown in "Show All Posts" mode so archived threads are still recognisable. */
-html[data-tpp-inbox-zero] .tpp-archived--visible {
+/*
+ * Archives shows the archived posts and hides the rest — but only once there is
+ * an archived post to show. Hiding every post in a virtualised list leaves it
+ * with no height at all, so it decides it has been scrolled to the end and
+ * fetches the channel's whole history, one batch after another: the list is
+ * seen "loading all the old posts" the moment an empty Archives is opened.
+ */
+html[data-tpp-inbox-zero][data-tpp-view="archives"][data-tpp-has-archives]
+  .tpp-post:not([data-tpp-tag="archive"]) {
+  display: none !important;
+}
+
+/*
+ * Nothing archived: the posts stay exactly as Teams laid them out, and the list
+ * itself goes out of sight instead. Nothing collapses, so nothing is fetched.
+ */
+html[data-tpp-inbox-zero][data-tpp-view="archives"]:not([data-tpp-has-archives])
+  .tpp-list {
+  visibility: hidden !important;
+}
+
+/* Every post in the Archives tab keeps a violet edge while it is on screen. */
+html[data-tpp-inbox-zero] .tpp-post--archived {
   box-shadow: inset 3px 0 0 rgba(139, 92, 246, 0.55);
 }
 
+/*
+ * Teams' own shimmer stand-ins for posts it is still fetching (markLoadingRows
+ * in content.js). With most posts hidden they read as a blank post at the
+ * bottom of the Archives list, so they are taken out of the layout there.
+ */
+html[data-tpp-inbox-zero][data-tpp-view="archives"] [data-tpp-placeholder] {
+  display: none !important;
+}
+
+/*
+ * The controls live in the gutter to the left of the post, level with its
+ * header, stacked vertically. They stay faintly visible so they can be found,
+ * and come fully forward when the post is hovered or focused. The gutter is
+ * reserved by the content script (applyLeftInset), so nothing overlaps them.
+ */
 .tpp-post-actions {
   position: absolute;
-  top: 4px;
-  right: 42px;
-  z-index: 6;
+  top: 6px;
+  left: -4px;
+  z-index: 7;
+  transform: translateX(-100%);
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 4px;
-  opacity: 0.62;
+  opacity: 0.55;
+  /*
+   * Always clickable. The rail is painted outside the post's box, so a
+   * `pointer-events: none` until-hover rule can never be lifted: the pointer
+   * lands in the gutter, the post never hovers, and the buttons stay dead.
+   */
+  pointer-events: auto;
   transition: opacity 0.15s ease;
 }
 
@@ -56,22 +108,38 @@ html[data-tpp-inbox-zero] .tpp-archived--visible {
 .tpp-post-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 8px;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   border: 1px solid var(--tpp-line);
-  border-radius: 999px;
+  border-radius: 50%;
   background: var(--tpp-surface);
   color: var(--tpp-text-muted);
   font: 600 11px/1 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
-  white-space: nowrap;
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .tpp-post-btn[hidden] {
   display: none !important;
+}
+
+.tpp-post-btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The buttons are icon-only, so the wording is kept for screen readers. */
+.tpp-post-btn-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .tpp-post-btn:hover {
@@ -87,6 +155,36 @@ html[data-tpp-inbox-zero] .tpp-archived--visible {
 
 .tpp-post-btn.is-on:hover {
   background: var(--tpp-purple-user);
+  border-color: transparent;
+  color: #fff;
+}
+
+/*
+ * An archived post's button carries the same treatment as a pinned post's pin:
+ * a white box in a filled purple circle. That is the post's status, and it is
+ * also the control that puts the post back in the Inbox.
+ */
+.tpp-archive-btn.is-on,
+.tpp-archive-btn.is-on:hover {
+  background: var(--tpp-purple);
+  border-color: transparent;
+  color: #fff;
+}
+
+/*
+ * A pinned post's pin is drawn filled on Teams purple, so its state reads
+ * without hovering; unpinned it is the same pin as an outline.
+ */
+.tpp-pin-btn.is-on,
+.tpp-pin-btn.is-on:hover {
+  background: var(--tpp-purple);
+  border-color: transparent;
+  color: #fff;
+}
+
+/* A moderator's pin cannot be clicked, but it is still a pinned post. */
+.tpp-post-btn:disabled.is-on {
+  background: var(--tpp-purple);
   border-color: transparent;
   color: #fff;
 }
@@ -109,84 +207,380 @@ html[data-tpp-inbox-zero] .tpp-archived--visible {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 40vh;
+  max-height: 60vh;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
   pointer-events: auto;
 }
 
+/*
+ * Normally the stack sits in the page flow above the composer: it takes real
+ * space, so it covers neither the channel tabs nor "Post in channel".
+ */
+.tpp-pin-stack--inline {
+  position: static !important;
+  top: auto !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: auto !important;
+  z-index: auto;
+  overflow: visible;
+  padding: 2px 2px 6px;
+}
+
+/*
+ * A pinned post is a purple bar until it is opened. Your own pins are the
+ * lighter violet, a moderator's pin Teams purple, so the two read apart.
+ */
 .tpp-pin-bar {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
-  min-height: 28px;
-  padding: 0 6px 0 10px;
-  border-radius: 7px;
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 6px;
+  background: var(--tpp-purple-user);
   color: #fff;
-  font: 500 12px/1.2 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
-  box-shadow: var(--tpp-shadow);
+  font: 600 12.5px/1.4 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  text-align: left;
   cursor: pointer;
-  flex: none;
+  overflow: hidden;
 }
 
-.tpp-pin-bar--native {
-  background: linear-gradient(90deg, #6264a7 0%, #4b53a0 100%);
-}
-
-.tpp-pin-bar--user {
-  background: linear-gradient(90deg, #8b5cf6 0%, #7c3aed 100%);
+.tpp-pin-item--native .tpp-pin-bar {
+  background: var(--tpp-purple);
 }
 
 .tpp-pin-bar:hover {
-  filter: brightness(1.08);
+  filter: brightness(1.1);
 }
 
 .tpp-pin-bar:focus-visible {
-  outline: 2px solid #fff;
-  outline-offset: -2px;
+  outline: 2px solid var(--tpp-purple);
+  outline-offset: 2px;
 }
 
-.tpp-pin-bar-icon {
+.tpp-pin-bar-title {
   flex: none;
-  display: flex;
-  align-items: center;
-  opacity: 0.95;
-}
-
-.tpp-pin-bar-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  white-space: nowrap;
+  max-width: 55%;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tpp-pin-bar-unpin {
-  flex: none;
+/* Whatever room is left on the bar carries the start of the post. */
+.tpp-pin-bar-snippet {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+/* A pinned post opens in a modal over a blurred page ---------------------- */
+
+.tpp-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483003;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  padding: 24px;
+}
+
+.tpp-modal[hidden] {
+  display: none !important;
+}
+
+.tpp-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(16, 16, 34, 0.5);
+  backdrop-filter: blur(7px) saturate(120%);
+  -webkit-backdrop-filter: blur(7px) saturate(120%);
+  animation: tpp-fade-in 0.16s ease;
+}
+
+/*
+ * The post keeps Teams' own look: no surface, no type of ours, just the post
+ * and its replies, scrolling on their own inside the card.
+ */
+.tpp-modal-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: min(84vh, 920px);
+  border-radius: 12px;
+  /*
+   * Teams' own surface and text colour, so the card matches the post it shows.
+   * content.js copies the post's computed colours on top of this (the modal
+   * sits outside the element Teams themes); the light fallbacks here keep the
+   * text readable if neither is available.
+   */
+  background: var(--colorNeutralBackground1, #ffffff);
+  color: var(--colorNeutralForeground1, #242424);
+  box-shadow: 0 28px 70px rgba(14, 14, 34, 0.45);
+  overflow: hidden;
+  animation: tpp-modal-in 0.18s ease;
+}
+
+.tpp-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  /* A neutral rule reads on a light card and a dark one alike. */
+  border-bottom: 1px solid rgba(128, 128, 128, 0.26);
+}
+
+.tpp-modal-actions {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+}
+
+.tpp-modal-actions[hidden] {
+  display: none !important;
+}
+
+/* The post's own rail, lying flat in the modal's header instead of the gutter. */
+.tpp-modal-actions .tpp-post-actions {
+  position: static;
+  top: auto;
+  left: auto;
+  transform: none;
+  flex-direction: row;
+  opacity: 1;
+}
+
+.tpp-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
   padding: 0;
   border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: #fff;
-  opacity: 0.75;
-  cursor: pointer;
-}
-
-.tpp-pin-bar-unpin:hover {
+  border-radius: 50%;
+  /*
+   * A white disc with a dark cross, so the close button reads on the post's
+   * surface whether the user is in light or dark mode, and against the dimmed
+   * page behind it in the copy modal.
+   */
+  background: #ffffff;
+  color: #1f1f28;
+  box-shadow: 0 1px 4px rgba(14, 14, 34, 0.28);
   opacity: 1;
-  background: rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease,
+    box-shadow 0.15s ease, transform 0.15s ease;
 }
 
-.tpp-pin-bar-unpin:focus-visible {
-  outline: 2px solid #fff;
-  outline-offset: -1px;
+.tpp-modal-close:hover {
+  background: #ffffff;
+  color: #000000;
+  opacity: 1;
+  box-shadow: 0 2px 9px rgba(14, 14, 34, 0.4);
+  transform: scale(1.06);
 }
+
+.tpp-modal-close:active {
+  transform: scale(0.96);
+}
+
+.tpp-modal-close:focus-visible {
+  outline: 2px solid var(--tpp-purple);
+  outline-offset: 2px;
+}
+
+.tpp-modal-body {
+  padding: 10px 16px 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@keyframes tpp-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes tpp-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * A pinned post opened live: the post itself and its thread lifted into a
+ * centred panel. The post is not restyled at all — only its position in the
+ * window is borrowed — so replying, reactions, "see more", the reply box and
+ * the theme are Teams' own, exactly as in the stream. The panel sits below
+ * Teams' popovers (mentions, emoji) so those still open above it.
+ */
+html[data-tpp-pin-modal] [data-tpp-modal-host] {
+  /*
+   * Where the panel sits is set inline by the lift, because it is centred on
+   * the page and re-centred when the post grows. Only what the lift does not
+   * set is left here.
+   */
+  box-sizing: border-box !important;
+  overscroll-behavior: contain;
+  z-index: 999001 !important;
+}
+
+/*
+ * The panel is shown as a popover, so it sits in the browser's top layer: above
+ * the dim, outside every ancestor's clipping and stacking context. The browser's
+ * own popover frame is stripped so the post keeps Teams' look; its theme surface
+ * is sampled onto it when it opens.
+ */
+html[data-tpp-pin-modal] [data-tpp-modal-host][popover] {
+  border: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  /*
+   * The browser's popover frame would otherwise hand the panel Canvas/CanvasText
+   * (white in dark mode). Teams' own surface and foreground stand in, and the
+   * post's exact colours are copied on top by content.js.
+   */
+  background-color: var(--colorNeutralBackground1, transparent);
+  color: var(--colorNeutralForeground1, inherit);
+  overscroll-behavior: contain;
+}
+
+/*
+ * Our own stream rail would hang off the row's edge and double the bar above
+ * the panel, so it stays out of the way. Everything of Teams' is untouched.
+ */
+html[data-tpp-pin-modal] [data-tpp-modal-host] .tpp-post > .tpp-post-actions {
+  display: none !important;
+}
+
+/*
+ * The modal's own bar: the pin's archive/unpin buttons and a close button,
+ * stacked in the left margin of the panel the way a post's own buttons sit in
+ * the stream. Nothing is ever drawn into the post.
+ */
+html[data-tpp-pin-modal] .tpp-live-chrome {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  z-index: 999002;
+}
+
+/*
+ * In the top layer, next to a top-layer panel: the browser's popover frame is
+ * stripped so only our buttons are drawn, and the position stays the one
+ * placeLiveChrome measured against the panel.
+ */
+html[data-tpp-pin-modal] .tpp-live-chrome[popover] {
+  position: fixed !important;
+  inset: auto !important;
+  margin: 0 !important;
+  border: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  overflow: visible !important;
+}
+
+/* The same archive/pin rail, standing in the bar. */
+html[data-tpp-pin-modal] .tpp-live-chrome .tpp-post-actions {
+  position: static;
+  transform: none;
+  flex-direction: column;
+  opacity: 1;
+}
+
+/*
+ * While a pinned post is open, nothing behind it answers the pointer: no gap
+ * control, no tabs, no other pin bars. The dim is the only thing there.
+ */
+html[data-tpp-pin-modal] .tpp-gap {
+  display: none !important;
+}
+
+html[data-tpp-pin-modal] #tpp-tabs,
+html[data-tpp-pin-modal] #tpp-pin-stack,
+html[data-tpp-pin-modal] .tpp-empty-state {
+  pointer-events: none !important;
+}
+
+/* The dim, blurred page behind the live panel. */
+html[data-tpp-pin-modal] [data-tpp-ui="pin-backdrop"] {
+  position: fixed;
+  inset: 0;
+  z-index: 999000;
+  animation: tpp-fade-in 0.16s ease;
+}
+
+/*
+ * The same dim, lifted into the top layer with the panel. There it is above
+ * every one of Teams' containers — the channel's scroll pane clipped it
+ * otherwise, so the blur used to stop at the posts — and it covers all of
+ * Teams, chrome included. The browser's popover frame is stripped so only the
+ * blur is left.
+ */
+html[data-tpp-pin-modal] [data-tpp-ui="pin-backdrop"][popover] {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  border: 0 !important;
+  padding: 0 !important;
+  background: rgba(16, 16, 34, 0.45) !important;
+  backdrop-filter: blur(8px) saturate(120%);
+  -webkit-backdrop-filter: blur(8px) saturate(120%);
+  overflow: hidden !important;
+}
+
+.tpp-pin-post {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+.tpp-pin-reply {
+  opacity: 0.95;
+}
+
+/* A pinned post Teams has not loaded: its author and the words kept with it. */
+.tpp-pin-fallback {
+  padding: 8px 0 10px;
+}
+
+.tpp-pin-fallback-author {
+  font-weight: 600;
+  color: var(--tpp-text-muted);
+}
+
+.tpp-pin-fallback-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+
 
 /* Inbox Zero: confetti empty state --------------------------------------- */
 
@@ -245,6 +639,12 @@ html[data-tpp-inbox-zero] .tpp-archived--visible {
   color: var(--tpp-purple);
 }
 
+/* The Archives empty state is informational, not a celebration. */
+.tpp-empty-title--calm {
+  font-size: clamp(20px, 3vw, 28px);
+  color: var(--tpp-text-muted);
+}
+
 .tpp-empty-copy {
   position: relative;
   max-width: 420px;
@@ -253,52 +653,209 @@ html[data-tpp-inbox-zero] .tpp-archived--visible {
   color: var(--tpp-text-muted);
 }
 
-/* Inbox Zero: Show All / Show Unread toggle ------------------------------ */
+/* Inbox / Archives tabs -------------------------------------------------- */
+/*
+ * These stand in for the channel's own "Posts" tab, so they are sized like a
+ * tab label rather than like a button: compact, and underlined when active.
+ */
 
-.tpp-view-toggle {
-  z-index: 2147483000;
+.tpp-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  pointer-events: auto;
+}
+
+/*
+ * In the channel's tab strip we add no styling of our own: each tab is a copy
+ * of Teams' Posts tab (buildTabs in content.js), so its type, padding, height,
+ * colour and selected bar are Teams' own.
+ */
+.tpp-tabs--inline {
   display: flex;
+  align-items: flex-start;
+  align-self: flex-start;
+  flex: none;
+  gap: 0;
+  position: relative;
+  z-index: 1;
+  height: auto;
+  margin: 0;
+  padding: 0;
+}
+
+.tpp-tabs--inline .tpp-tab {
+  cursor: pointer;
+}
+
+/*
+ * Fallback strip, used only when there is no Posts tab to copy (a Teams build
+ * we do not recognise): compact, with a purple bar under the active tab.
+ */
+.tpp-tabs:not(.tpp-tabs--inline) .tpp-tab {
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--tpp-text-muted);
+  font: 600 12px/1 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.tpp-tabs:not(.tpp-tabs--inline) .tpp-tab:hover {
+  background: rgba(98, 100, 167, 0.12);
+  color: var(--tpp-purple);
+}
+
+.tpp-tabs:not(.tpp-tabs--inline) .tpp-tab.is-active,
+.tpp-tabs:not(.tpp-tabs--inline) .tpp-tab.is-active:hover {
+  color: var(--tpp-purple);
+  box-shadow: inset 0 -2px 0 var(--tpp-purple);
+}
+
+.tpp-tab:focus-visible {
+  outline: 2px solid var(--tpp-purple);
+  outline-offset: 1px;
+}
+
+/* Fallback placement when there is no Posts tab to sit on. */
+.tpp-tabs:not(.tpp-tabs--inline) {
+  z-index: 2147483000;
+  padding: 2px;
+  border: 1px solid var(--tpp-line);
+  border-radius: 8px;
+  background: var(--tpp-surface);
+  box-shadow: var(--tpp-shadow);
+}
+
+/*
+ * Teams' own "Posts" tab stays in the DOM — its panel is what renders the posts
+ * — but it leaves the layout, so our two tabs take its place in the strip.
+ */
+.tpp-native-tab-hidden {
+  display: none !important;
+}
+
+/*
+ * A pinned post is on its bar while it is pinned; unpinning puts it back into
+ * the stream in its own chronological place.
+ */
+html[data-tpp-pinned-messages][data-tpp-view="inbox"]
+  .tpp-post[data-tpp-pinned]:not([data-tpp-modal]) {
+  display: none !important;
+}
+
+/* Hover the seam between two posts: archive everything above -------------- */
+
+.tpp-gap {
+  position: fixed;
+  z-index: 2147483001;
+  display: none;
+  height: 0;
   pointer-events: none;
 }
 
-.tpp-view-btn {
+.tpp-gap.is-on {
+  display: block;
+}
+
+.tpp-gap-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -2px;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    rgba(139, 92, 246, 0.15) 0%,
+    #8b5cf6 16%,
+    #8b5cf6 84%,
+    rgba(139, 92, 246, 0.15) 100%
+  );
+  box-shadow: 0 0 10px rgba(139, 92, 246, 0.55);
+}
+
+.tpp-gap-btn {
+  position: absolute;
+  left: 50%;
+  right: auto;
+  top: -2px;
+  transform: translate(-50%, -50%);
   pointer-events: auto;
-  padding: 8px 18px;
-  border: 1px solid rgba(255, 255, 255, 0.28);
+  height: 26px;
+  padding: 0 13px;
+  border: none;
   border-radius: 999px;
-  background: linear-gradient(135deg, #6264a7 0%, #4b53a0 100%);
+  background: #8b5cf6;
   color: #fff;
-  font: 700 12.5px/1 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  font: 700 11.5px/1 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  white-space: nowrap;
   cursor: pointer;
-  box-shadow: var(--tpp-shadow);
-  transition: filter 0.15s ease, transform 0.15s ease;
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.45);
 }
 
-.tpp-view-btn:hover {
-  filter: brightness(1.1);
-  transform: translateY(-1px);
+.tpp-gap-btn:hover {
+  background: #7c3aed;
 }
 
-.tpp-view-btn:focus-visible {
+.tpp-gap-btn:focus-visible {
   outline: 2px solid #fff;
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
 /* Shared: toast and jump highlight --------------------------------------- */
 
+/*
+ * A status message is a small modal of its own: larger type on a translucent
+ * surface, centred on the post that changed rather than on the page. The
+ * position comes from placeToast in content.js.
+ */
 .tpp-toast {
-  z-index: 2147483001;
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  width: auto;
+  max-width: min(480px, calc(100vw - 48px));
+  z-index: 2147483002;
   display: flex;
   justify-content: center;
-  padding: 8px 14px;
-  border-radius: 7px;
-  background: #2f2f5c;
+  padding: 18px 26px;
+  border-radius: 14px;
+  background: rgba(47, 47, 92, 0.6);
+  backdrop-filter: blur(10px) saturate(130%);
+  -webkit-backdrop-filter: blur(10px) saturate(130%);
   color: #fff;
-  font: 500 12px/1.35 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  font: 600 18px/1.4 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
   text-align: center;
-  box-shadow: var(--tpp-shadow);
+  box-shadow: 0 18px 48px rgba(20, 20, 48, 0.32);
   pointer-events: none;
+  opacity: 0;
+}
+
+.tpp-toast.is-on {
+  animation: tpp-toast-in 0.18s ease forwards;
+}
+
+@keyframes tpp-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
 }
 
 .tpp-post.tpp-flash {
@@ -327,7 +884,17 @@ html[data-tpp-inbox-zero] .tpp-archived--visible {
     animation: none;
   }
 
-  .tpp-view-btn:hover {
-    transform: none;
+  .tpp-modal-backdrop,
+  .tpp-modal-card {
+    animation: none;
+  }
+
+  html[data-tpp-pin-modal] [data-tpp-ui="pin-backdrop"] {
+    animation: none;
+  }
+
+  .tpp-toast.is-on {
+    opacity: 1;
+    animation: none;
   }
 }

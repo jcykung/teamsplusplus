@@ -11,7 +11,8 @@
  *   teamsPlusPlus.features  on/off switches for the two features
  *   teamsPlusPlus.archive   post id -> { c: reply count at archive time, t: time }
  *   teamsPlusPlus.pins      post id -> { x: preview, a: author, t: time }
- *   teamsPlusPlus.view      "inbox" (archived posts hidden) or "all"
+ *   teamsPlusPlus.view      "inbox" (archived posts hidden) or "archives"
+ *                           (only archived posts shown)
  */
 (function (root) {
   'use strict';
@@ -26,14 +27,14 @@
       id: 'inboxZero',
       attr: 'data-tpp-inbox-zero',
       label: 'Inbox Zero',
-      hint: 'Adds an Archive button to every post. Archived posts stay hidden like read email until someone replies, then they come back. A Show All Posts button at the bottom restores the normal view.',
+      hint: 'Adds Archive and Pin buttons to the left margin of every post. A post with no tag is in your Inbox; archiving tags it archive, Unarchive removes the tag again, and the Inbox and Archive tabs stand in for the channel tab bar’s Posts tab to show one or the other.',
       default: true
     },
     {
       id: 'pinnedMessages',
       attr: 'data-tpp-pinned-messages',
       label: 'Pinned message bars',
-      hint: 'Shows pinned posts in a thin purple bar at the top of the channel. Click a bar to jump to the post; pin any post yourself with the pin button.',
+      hint: 'Shows pinned posts as purple bars at the top of the channel. Click a bar to open the post and its replies; pin any post yourself with the pin button.',
       default: true
     }
   ];
@@ -76,7 +77,7 @@
   }
 
   function normalizeView(value) {
-    return value === 'all' ? 'all' : 'inbox';
+    return value === 'archives' ? 'archives' : 'inbox';
   }
 
   /** Promise wrapper around chrome.storage.sync.get. */

@@ -63,7 +63,7 @@
   const ARCHIVE_ANIM_MS = 300;
   const HAS_ARCHIVES_ATTR = 'data-tpp-has-archives';
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-01.30';
+  const BUILD = '2026-11-01.31';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -551,7 +551,7 @@
         if (post) {
           // The same box the user sees: a folded post is its card. Its row keeps
           // padding above the card, and measuring that would pull the line up.
-          const nextCard = post.querySelector(':scope > [data-tpp-ui="preview"]');
+          const nextCard = post.querySelector('[data-tpp-ui="preview"]');
           const nextShown =
             nextCard && !post.classList.contains('tpp-unfold') ? nextCard : post;
           nextBox = nextShown.getBoundingClientRect();
@@ -560,9 +560,19 @@
         next = next.nextElementSibling;
       }
 
-      const space = nextBox ? (nextBox.top - bottom) / 2 : 8;
+      // The middle of the space the user sees: under the last-read post's card
+      // and over the next post's card.
+      const target = nextBox ? (bottom + nextBox.top) / 2 : bottom + 18;
       const floor = bottom - rowRect.top + 2;
-      const top = bottom - rowRect.top + Math.max(space, 2) - seam.offsetHeight / 2;
+
+      // The line is measured where it is drawn and moved by the difference, so
+      // any offset between its box and the line inside it (a copied divider with
+      // margins, a clipped one) is taken out instead of assumed away.
+      const drawn = seam.getBoundingClientRect();
+      const top = drawn.height
+        ? (parseFloat(seam.style.top) || 0) + (target - (drawn.top + drawn.height / 2))
+        : bottom - rowRect.top + Math.max((nextBox ? nextBox.top - bottom : 16) / 2, 2) - seam.offsetHeight / 2;
+
       // Only when it moves: writing the same value on every scan is a mutation,
       // and a mutation on our own node is what a scan loop feeds on.
       const nextTop = `${Math.round(Math.max(top, floor))}px`;
@@ -604,6 +614,8 @@
     seam.className = 'tpp-last-read';
     seam.dataset.tppUi = 'last-read';
     seam.setAttribute('aria-hidden', 'true');
+    // In pixels from the start: placeLastRead reads this back to correct itself.
+    seam.style.top = '0px';
 
     if (native) {
       const copy = native.cloneNode(true);

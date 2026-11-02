@@ -63,7 +63,7 @@
   const ARCHIVE_ANIM_MS = 300;
   const HAS_ARCHIVES_ATTR = 'data-tpp-has-archives';
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-01.29';
+  const BUILD = '2026-11-01.30';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -491,6 +491,20 @@
     for (const row of document.querySelectorAll('.tpp-post')) {
       paintLastRead(row, endsLastRead(row));
     }
+    syncLastReadBands();
+  }
+
+  /**
+   * Takes the band off any row that no longer carries the line. A stale band is
+   * 26px of empty space of its own, which is how opening and closing a post could
+   * leave the gap above it wider than it was.
+   */
+  function syncLastReadBands() {
+    for (const row of document.querySelectorAll('.tpp-last-read-row')) {
+      if (!row.querySelector(':scope > [data-tpp-ui="last-read"]')) {
+        row.classList.remove('tpp-last-read-row');
+      }
+    }
   }
 
   /** Whether an element is actually painted: a hidden one has no boxes. */
@@ -535,7 +549,12 @@
           ? next
           : next.querySelector('.tpp-post');
         if (post) {
-          nextBox = post.getBoundingClientRect();
+          // The same box the user sees: a folded post is its card. Its row keeps
+          // padding above the card, and measuring that would pull the line up.
+          const nextCard = post.querySelector(':scope > [data-tpp-ui="preview"]');
+          const nextShown =
+            nextCard && !post.classList.contains('tpp-unfold') ? nextCard : post;
+          nextBox = nextShown.getBoundingClientRect();
           break;
         }
         next = next.nextElementSibling;
@@ -1134,6 +1153,7 @@
 
     rowsById = next;
     nativePins = native;
+    syncLastReadBands();
     placeLastRead();
     harvestPinnedPane();
     applyViewFiltering();

@@ -3,6 +3,9 @@
 A Chrome extension (Manifest V3) that turns Microsoft Teams channels into an
 inbox. Archive posts like read email, and keep pinned posts one click away.
 
+Everything here applies to a channel's **Posts** area only. Chats, Calendar,
+Files, Calls and the rest of Teams are left exactly as Teams draws them.
+
 It uses the same popup, welcome-screen and changelog design as the Better Teacher
 Portal and Classroom++ extensions, with Teams++ branding and a purple-and-white
 palette that matches Microsoft Teams.
@@ -24,8 +27,9 @@ Access can be revoked at any time from `chrome://extensions` → **Site access**
 
 ### Inbox Zero
 
-Every post gets **Archive** and **Pin** buttons in its left margin, kept faint
-until you hover the post. Comments and replies never get them — only the post
+Every post gets **Archive** and **Pin** buttons in its left margin, which appear
+when you hover the post and stay out while it is open. Comments and replies
+never get them — only the post
 itself can be archived or pinned. The margin they float in is taken out of the
 message list's own left edge, not added to it, so no post moves on screen. Archiving hides the post from the channel, just
 like moving a read email out of your inbox; an archived post keeps only its
@@ -40,14 +44,18 @@ like moving a read email out of your inbox; an archived post keeps only its
 - **Inbox** and **Archive** sit in the channel tab bar in place of **Posts**,
   in its style: the Posts tab leaves the layout and the tabs beside it slide over
   by the width the pair needs, so **Shared**, **Files** and the rest stay put.
-  Posts in Archive keep a violet edge and carry an **Unarchive** button showing
-  a white archive box in a filled purple circle, the same filled treatment a
-  pinned post's pin gets.
-- Hovering the space between two posts draws a purple line and a centred **Archive
-  all older posts** button, which archives every post on the older side of that
-  line in one click. The cut is the timestamp of the older of the two posts either
-  side of the line, so it is right whether the channel lists newest-first or
-  oldest-first, and after you flip that in Teams' settings.
+  Archive is the Posts list filtered, not a second list: the same posts with
+  their tag set. Nothing is re-dressed, and the empty box Teams wrapped a
+  filtered-out post in goes with it, so no violet edges or ghost rows are left
+  behind. Posts carry an **Unarchive** button showing a white archive box in a
+  filled purple circle, the same filled treatment a pinned post's pin gets.
+- Hovering the space between two posts draws a purple line, never wider than a
+  post, with a centred **Archive all older posts** button. The two posts either
+  side of the line are compared by the date and time they show — not by where
+  they sit — and everything on the older side is archived in one click, so it is
+  right whether the channel lists newest-first or oldest-first, and after you
+  flip that in Teams' settings. The posts slide to the right and fade as they go
+  rather than vanishing.
 - If there is nothing archived yet, the Archive tab says so instead of looking
   broken, and it leaves the channel's list exactly as Teams laid it out. Hiding
   every post in a virtualised list gives it no height, so it decides it has been
@@ -60,21 +68,35 @@ like moving a read email out of your inbox; an archived post keeps only its
 
 ### Compact posts
 
-On by default. Every post is drawn as three lines: one header line with the
-user's name and the subject, then two lines of the text, with anything tall in
-the body (images, cards, attachments) out of the way. The time and the markers
-beside the name come out of the fold, since they are what wrapped the header onto
-a second line.
+On by default. Every post is drawn as a card you can browse: the author's
+picture in a circle, their name and the time, the post's opening line as a big
+bold headline, and the first two lines of the words under it. A chevron sits on
+the right, so the card reads as something that opens.
 
-Hovering a folded post lights the whole post up in Teams purple, the way a button
-lights up: the post is the control. Clicking it unfolds it to its full height and
-keeps it open, the way a mail app opens a message; clicking it again folds it
-back. A channel that showed two posts now shows a dozen, which is the usual
-complaint about Teams' post list.
+The card keeps everything else out of the fold — the reply thread, reactions,
+Teams' own hover toolbar, images, videos and attachments — so a channel becomes a
+list of headlines instead of a wall of detail. Teams' own post is still there,
+behind the card, untouched.
 
-The switch sits beside the **Inbox** and **Archive** tabs in the channel, and the
-same switch is in the popup; both write the one synced preference, so flipping it
-in Teams flips it in the popup and on every signed-in profile.
+Hovering fills the card with Teams purple the way a filled button reads, and
+clicking it opens the post to its full height, handed straight back to Teams'
+own layout, replies and all; clicking it again folds it back. A channel that
+showed two posts now shows a dozen, which is the usual complaint about Teams'
+post list.
+
+Light and dark are both the card's own: white with dark type in light mode, a
+soft charcoal with near-white type in dark. The theme is read from the page — a
+theme attribute or class Teams leaves on `<html>`, or the colour actually
+painted behind the posts, with the desktop setting only as a last resort — so the
+card matches Teams even when the desktop is set the other way, and it repaints
+the moment Teams switches.
+
+A folded post keeps the signals that tell you where to start reading: Teams' own
+**New** badge rides on the card, and the **Last read** divider is drawn over the
+seam above the first unread post.
+
+The switch lives in the popup and writes one synced preference, so it applies to
+every Teams tab and every signed-in Chrome profile.
 
 ### Pinned posts
 

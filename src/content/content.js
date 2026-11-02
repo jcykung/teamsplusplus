@@ -59,9 +59,21 @@
   const PIN_COPY_ID = 'tpp-pin-copy';
   const GAP_ID = 'tpp-gap';
   const TOAST_ID = 'tpp-toast';
+  /** How long a post takes to slide out of the Inbox when it is archived. */
+  const ARCHIVE_ANIM_MS = 300;
   const HAS_ARCHIVES_ATTR = 'data-tpp-has-archives';
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-01.8';
+  const BUILD = '2026-11-01.16';
+  /** What the stylesheet reads to pick its light or dark palette. */
+  const THEME_ATTR = 'data-tpp-theme';
+  /** Attributes Teams leaves behind that name the theme. */
+  const THEME_HINTS = [
+    'data-theme',
+    'data-app-theme',
+    'data-color-scheme',
+    'data-color-mode',
+    'data-theme-name'
+  ];
 
   /** How close the pointer must be to the seam between two posts, in px. */
   const GAP_TOLERANCE = 14;
@@ -82,9 +94,9 @@
     '<svg viewBox="0 0 24 24" width="46" height="46" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
   const EMPTY_ARCHIVE_SVG =
     '<svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 13h4"/></svg>';
-  /** The compact view switch, drawn beside the Inbox/Archive tabs. */
-  const COMPACT_SVG =
-    '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>';
+  /** The small chevron on a folded post's card: this card opens. */
+  const CHEVRON_SVG =
+    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
   const CONFETTI_COLORS = [
     '#6264a7',
     '#8b5cf6',
@@ -107,6 +119,13 @@
   let pins = {};
   let pinChannel = '';
   let view = VIEW_INBOX;
+  /**
+   * Whether the page on screen is a channel's Posts area. Teams++ is for
+   * channels only: a chat has its own message list and gets none of it, which
+   * is enforced by writing the feature flags (what teams.css hangs every style
+   * off) only while this is true.
+   */
+  let channelMode = null;
 
   /** id -> { row, text, author, replies, archived } for the latest scan. */
   let rowsById = new Map();
@@ -146,7 +165,7 @@
    * by id, so a re-render does not fold the one being read.
    */
   function onPostClick(event) {
-    if (!ready || !features || !features.compactPosts) return;
+    if (!ready || !channelMode || !features || !features.compactPosts) return;
     const target = event.target;
     if (!target || target.nodeType !== 1) return;
     if (target.closest('button, a, input, textarea, select, [contenteditable="true"], .tpp-post-actions')) {
@@ -155,8 +174,13 @@
 
     const row = target.closest('.tpp-post');
     if (!row || !row.dataset.tppId) return;
+    toggleUnfold(row);
+  }
 
-    const id = row.dataset.tppId;
+  /** Folds one post, or unfolds it again if it is already open. */
+  function toggleUnfold(row) {
+    const id = row && row.dataset.tppId;
+    if (!id) return;
     if (unfolded.has(id)) unfolded.delete(id);
     else unfolded.add(id);
     row.classList.toggle('tpp-unfold', unfolded.has(id));
@@ -181,8 +205,8 @@
 
   /**
    * Marks the post's header line, which the compact view holds to a single
-   * line: the name, and the subject Teams shows beside it, with the time and
-   * the rest of the meta taken out of the way.
+   * line: the name, the date and time, and the subject Teams shows beside them.
+   * The time is marked so it can be dimmed against the name, not hidden.
    */
   function markHead(row) {
     if (row.querySelector('.tpp-head')) return;
@@ -196,14 +220,274 @@
     if (!head.classList.contains('tpp-head')) head.classList.add('tpp-head');
     if (!author.classList.contains('tpp-author')) author.classList.add('tpp-author');
 
-    // Only the time comes out. A subject Teams renders beside the name is part
-    // of the line the user asked to keep, so it stays.
+    // The time stays: the folded line reads name, date/time, subject. A subject
+    // Teams renders beside the name is part of that line too, so it is left
+    // alone.
     for (const selector of S.messageTime || []) {
       for (const el of head.querySelectorAll(selector)) {
         if (el.contains(author) || author.contains(el)) continue;
-        if (!el.classList.contains('tpp-head-meta')) el.classList.add('tpp-head-meta');
+        if (!el.classList.contains('tpp-head-time')) el.classList.add('tpp-head-time');
       }
     }
+  }
+
+  /**
+   * The picture Teams drew for a post's author, as an image URL. It sits beside
+   * the post's text, not in it, and may be an <img> or a painted background.
+   */
+  function avatarOf(row) {
+    const head = row.querySelector('.tpp-head');
+    const body = row.querySelector('.tpp-body');
+    const isPostText = (el) =>
+      Boolean((head && head.contains(el)) || (body && body.contains(el)));
+
+    for (const selector of S.messageAvatar || []) {
+      let found = [];
+      try {
+        found = Array.from(row.querySelectorAll(selector));
+      } catch (_) {
+        continue; // A bad selector from a hand edit should not stop the rest.
+      }
+      for (const el of found) {
+        if (isPostText(el) || el.hasAttribute('data-tpp-ui')) continue;
+        const img = el.tagName === 'IMG' ? el : el.querySelector('img');
+        if (img && img.src) return img.src;
+        const painted = getComputedStyle(el).backgroundImage || '';
+        const url = /url\(["']?(.*?)["']?\)/.exec(painted);
+        if (url && url[1]) return url[1];
+      }
+    }
+    return '';
+  }
+
+  /** What the card shows when the post has no picture: the author's initials. */
+  function initialsOf(name) {
+    const words = String(name || '')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!words.length) return '?';
+    const first = words[0][0] || '';
+    const last = words.length > 1 ? words[words.length - 1][0] || '' : '';
+    return `${first}${last}`.toUpperCase();
+  }
+
+  /**
+   * The headline on a folded post's card: Teams' own subject when the post has
+   * one, otherwise the opening line of the post. previewOf is not used here
+   * because it flattens the text to one line; the first line is the subject.
+   */
+  function headlineOf(row) {
+    const explicit = first(S.messageSubject, row);
+    const body = first(S.messageBody, row) || row;
+    if (explicit && !body.contains(explicit)) {
+      const text = collapse(explicit.textContent || '');
+      if (text) return text.slice(0, 140);
+    }
+
+    const raw = String(body.textContent || '').replace(/\r/g, '');
+    const lines = raw.split('\n').map(collapse).filter(Boolean);
+    const lead = lines[0] || '';
+    if (lines.length > 1 && lead) return lead.slice(0, 140);
+    if (lead.length <= 120) return lead.slice(0, 140);
+
+    // One long paragraph: the headline is its opening words, cut on a word.
+    const cut = lead.slice(0, 120).replace(/\s+\S*$/, '');
+    return `${cut || lead.slice(0, 110)}…`;
+  }
+
+  /** The rest of the post, shown under the headline in the fold. */
+  function snippetFor(row, headline) {
+    const body = first(S.messageBody, row) || row;
+    let text = collapse(body.textContent || '');
+    const lead = collapse(headline || '').replace(/…$/, '');
+    if (lead && text.startsWith(lead)) text = text.slice(lead.length);
+    return text.replace(/^[\s\-–—:|,.;]+/, '').slice(0, 300);
+  }
+
+  /**
+   * The card a folded post shows: the author's picture, their name and the time,
+   * the post's opening line as a headline, and the first two lines of the words
+   * under it. It is a channel as a list of headlines — open the ones worth
+   * reading, and the rest cost a line each.
+   *
+   * The card is a button of our own, and the post Teams rendered stays in the
+   * row behind it, so opening the post hands the row straight back to Teams
+   * with replies, reactions and the reply box working (teams.css swaps them).
+   */
+  function paintPreview(row) {
+    if (!features || !features.compactPosts) return;
+    if (!row.dataset.tppId) return;
+
+    const author = authorOf(row);
+    const headline = headlineOf(row);
+    const snippet = snippetFor(row, headline);
+    const picture = avatarOf(row);
+    const timeEl = first(S.messageTime, row);
+    const time = timeEl ? collapse(timeEl.textContent || '') : '';
+    // Unread and "last read" are Teams' own markers, and both live in the part
+    // of the row the card hides: they are read here and the card carries them.
+    const unread = isUnreadPost(row);
+    const lastRead = startsLastRead(row);
+    const signature = [
+      author,
+      time,
+      headline,
+      snippet,
+      picture,
+      unread ? 'new' : '',
+      lastRead ? 'seam' : ''
+    ].join('|');
+
+    let card = row.querySelector(':scope > [data-tpp-ui="preview"]');
+    if (card && card.dataset.tppSig === signature) {
+      if (!row.classList.contains('tpp-previewed')) row.classList.add('tpp-previewed');
+      return;
+    }
+
+    if (!card) {
+      card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'tpp-preview';
+      card.dataset.tppUi = 'preview';
+      card.innerHTML =
+        '<span class="tpp-preview-avatar"></span>' +
+        '<span class="tpp-preview-main">' +
+        '<span class="tpp-preview-meta">' +
+        '<span class="tpp-preview-name"></span>' +
+        '<span class="tpp-preview-time"></span>' +
+        '<span class="tpp-preview-new" hidden>New</span>' +
+        '</span>' +
+        '<span class="tpp-preview-subject"></span>' +
+        '<span class="tpp-preview-snippet"></span>' +
+        '</span>' +
+        '<span class="tpp-preview-open" aria-hidden="true">' +
+        CHEVRON_SVG +
+        '</span>';
+      card.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const live = event.currentTarget.closest('.tpp-post');
+        if (live) toggleUnfold(live);
+      });
+      row.append(card);
+    }
+
+    card.dataset.tppSig = signature;
+    const slot = card.querySelector('.tpp-preview-avatar');
+    slot.textContent = '';
+    if (picture) {
+      const img = document.createElement('img');
+      img.alt = '';
+      img.src = picture;
+      slot.append(img);
+    } else {
+      slot.textContent = initialsOf(author);
+    }
+
+    card.querySelector('.tpp-preview-name').textContent = author || 'Someone';
+    const timeSlot = card.querySelector('.tpp-preview-time');
+    timeSlot.textContent = time;
+    timeSlot.hidden = !time;
+    card.querySelector('.tpp-preview-subject').textContent =
+      headline || 'No text in this post';
+    const snippetSlot = card.querySelector('.tpp-preview-snippet');
+    snippetSlot.textContent = snippet;
+    snippetSlot.hidden = !snippet;
+    card.querySelector('.tpp-preview-new').hidden = !unread;
+    paintLastRead(row, lastRead);
+    row.classList.add('tpp-previewed');
+  }
+
+  /** Teams' own unread badge on a post, when it renders one. */
+  const NEW_BADGE_SELECTOR =
+    '[data-tid="new-message-badge"], [data-tid*="new-message-status" i]';
+  /** Teams' own "Last read" divider: inside a post, or between two of them. */
+  const LAST_READ_SELECTOR = '[data-tid="last-read-line"], [data-tid*="last-read" i]';
+
+  /** Whether Teams marks this post as unread. */
+  function isUnreadPost(row) {
+    try {
+      return Boolean(row.querySelector(NEW_BADGE_SELECTOR));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * Whether "Last read" sits on this post — that is, whether this is where the
+   * unread posts begin. Teams puts the divider inside the post below it on some
+   * builds and between the two posts on others, so both are checked.
+   */
+  function startsLastRead(row) {
+    try {
+      if (row.querySelector(LAST_READ_SELECTOR)) return true;
+      const before = row.previousElementSibling;
+      if (!before || before.classList.contains('tpp-post')) return false;
+      return Boolean(
+        before.matches(LAST_READ_SELECTOR) || before.querySelector(LAST_READ_SELECTOR)
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * The folded card draws Teams' "Last read" divider over the seam above the
+   * post. The divider itself sits in the row the card hides, so it is painted
+   * beside the card rather than borrowed from Teams.
+   */
+  function paintLastRead(row, wanted) {
+    let seam = row.querySelector(':scope > [data-tpp-ui="last-read"]');
+    if (!wanted) {
+      seam?.remove();
+      return;
+    }
+    if (seam) return;
+
+    seam = document.createElement('div');
+    seam.className = 'tpp-last-read';
+    seam.dataset.tppUi = 'last-read';
+    seam.setAttribute('aria-hidden', 'true');
+    seam.innerHTML =
+      '<span class="tpp-last-read-line"></span>' +
+      '<span class="tpp-last-read-label">Last read</span>' +
+      '<span class="tpp-last-read-line"></span>';
+    row.append(seam);
+  }
+
+  /**
+   * Marks what a folded post does not show: the reply thread, reactions, Teams'
+   * hover toolbar, a reply box — everything below the row that is neither the
+   * header line nor the text itself.
+   *
+   * Only the branches that lead to the header and the body are kept; each other
+   * branch is marked once at its top, so one rule (teams.css) hides the whole
+   * subtree until the post is opened. Teams replaces these nodes freely, so the
+   * next scan marks the new ones; a stale mark on a node nobody reads is inert.
+   */
+  function markDetails(row) {
+    const head = row.querySelector('.tpp-head');
+    const body = row.querySelector('.tpp-body');
+    if (!head || !body) return;
+    // One inside the other leaves no boundary to hide at: leave the post whole.
+    if (head.contains(body) || body.contains(head)) return;
+
+    const markIn = (node) => {
+      for (const child of Array.from(node.children)) {
+        if (child === head || child === body) continue;
+        // Our own rail is painted in the post's margin, not part of it.
+        if (child.hasAttribute('data-tpp-ui')) continue;
+        if (child.contains(head) || child.contains(body)) {
+          markIn(child);
+          continue;
+        }
+        if (!child.classList.contains('tpp-detail')) child.classList.add('tpp-detail');
+      }
+    };
+    // From the row down: the branches that lead to the header or the text are
+    // kept, so an avatar column or a reply thread at either level is a detail.
+    markIn(row);
   }
 
   /** What a status message is centred on: the post that changed. */
@@ -235,6 +519,107 @@
       value = ((value << 5) + value) ^ input.charCodeAt(i);
     }
     return (value >>> 0).toString(36);
+  }
+
+  /**
+   * Whether a CSS colour reads as dark, or null when there is no colour to judge
+   * (transparent, or a form this does not parse). Wide-gamut `color(srgb …)` is
+   * converted, so it gives the same answer as `rgb(…)`.
+   */
+  function isDarkColor(color) {
+    const text = String(color || '');
+    let r;
+    let g;
+    let b;
+    let alpha = 1;
+
+    const rgb = /rgba?\(([^)]+)\)/.exec(text);
+    if (rgb) {
+      const parts = rgb[1].split(/[,\s/]+/).filter(Boolean).map(Number);
+      r = parts[0];
+      g = parts[1];
+      b = parts[2];
+      if (parts.length > 3) alpha = parts[3];
+    } else {
+      const wide = /color\(srgb\s+([^)]+)\)/.exec(text);
+      if (!wide) return null;
+      const parts = wide[1].split(/[\s/]+/).filter(Boolean).map(Number);
+      if (parts.length < 3) return null;
+      r = parts[0] * 255;
+      g = parts[1] * 255;
+      b = parts[2] * 255;
+      if (parts.length > 3) alpha = parts[3];
+    }
+
+    if (![r, g, b].every(Number.isFinite) || !Number.isFinite(alpha)) return null;
+    if (alpha === 0) return null;
+    // Rec. 709 luma: how bright the colour looks, not how bright its channels are.
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
+  }
+
+  /** A theme name Teams itself has written onto <html> or <body>. */
+  function themeFromMarkup() {
+    for (const el of [document.documentElement, document.body]) {
+      if (!el) continue;
+      for (const name of THEME_HINTS) {
+        const value = String(el.getAttribute(name) || '').toLowerCase();
+        if (!value) continue;
+        if (value.includes('dark')) return 'dark';
+        if (value.includes('light')) return 'light';
+      }
+      const classes = typeof el.className === 'string' ? el.className.toLowerCase() : '';
+      if (/(^|[\s_-])dark([\s_-]|$)/.test(classes)) return 'dark';
+      if (/(^|[\s_-])light([\s_-]|$)/.test(classes)) return 'light';
+    }
+    return '';
+  }
+
+  /**
+   * The theme read off the surface the posts sit on: the message list, then its
+   * ancestors, until something is actually painted. That is the colour the user
+   * sees behind a post, so it is right whatever Teams names its theme.
+   */
+  function themeFromSurface() {
+    const start = lastList || findMessageList() || document.body;
+    for (let node = start; node; node = node.parentElement) {
+      const dark = isDarkColor(getComputedStyle(node).backgroundColor);
+      if (dark !== null) return dark ? 'dark' : 'light';
+    }
+    return '';
+  }
+
+  function prefersDark() {
+    try {
+      return Boolean(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * Light or dark, asked in the order that answers most truthfully:
+   *
+   *   1. a theme attribute or class Teams leaves on <html>/<body>,
+   *   2. the painted background behind the posts,
+   *   3. the operating system's setting.
+   *
+   * The OS is last on purpose: Teams can be dark on a light desktop, and the
+   * card should match Teams, not the desktop.
+   */
+  function detectTheme() {
+    return themeFromMarkup() || themeFromSurface() || (prefersDark() ? 'dark' : 'light');
+  }
+
+  /**
+   * Publishes the theme for the stylesheet, which hangs its light and dark
+   * palettes off `data-tpp-theme` on <html>. Nothing is written unless it
+   * changed, so following a switch costs one string compare.
+   */
+  function applyTheme() {
+    const html = document.documentElement;
+    if (!html) return;
+    const theme = detectTheme();
+    if (html.getAttribute(THEME_ATTR) !== theme) html.setAttribute(THEME_ATTR, theme);
   }
 
   function isScrollable(el) {
@@ -314,6 +699,17 @@
   function timeOf(id, row) {
     const numeric = /^m:(\d{10,})$/.exec(id || '');
     if (numeric) return Number(numeric[1]);
+    if (!row) return 0;
+
+    // Teams' own id can be a GUID on some builds, but the stamp is still in the
+    // page: the author, body and timestamp elements are suffixed with it
+    // (`id="timestamp-1793472227903"`). Without this, every post looked
+    // undated, and the archive button had to guess which side was older.
+    const tagged = row.querySelector(
+      '[id^="timestamp-"], [id^="author-"], [id^="content-"]'
+    );
+    const suffix = tagged && tagged.id ? /(\d{10,})$/.exec(tagged.id) : null;
+    if (suffix) return Number(suffix[1]);
 
     const stamp = row.querySelector('time[datetime]')?.getAttribute('datetime');
     const parsed = stamp ? Date.parse(stamp) : NaN;
@@ -321,16 +717,41 @@
   }
 
   /**
-   * Channels can list posts newest-first or oldest-first. Comparing the first
-   * and last post's own timestamp tells which way this channel is sorted.
+   * The date and time printed on a folded post's card — "10-24 8:54 p.m." —
+   * read as a timestamp. This is the reading the user can see, and the one the
+   * archive button is asked to compare, so it is read tolerantly: a comma after
+   * the date, a full or two-digit year, and 24-hour times are all accepted.
    */
-  function sortDirection() {
-    const stamps = [];
-    for (const record of rowsById.values()) {
-      if (record.ts) stamps.push(record.ts);
+  function previewTimeOf(row) {
+    const el = row?.querySelector('[data-tpp-ui="preview"] .tpp-preview-time');
+    const text = collapse(el ? el.textContent : '');
+    const parts = /(\d{1,2})[-/](\d{1,2})(?:[-/](\d{2,4}))?[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap])?\.?m?\.?/i.exec(
+      text
+    );
+    if (!parts) return 0;
+
+    const now = new Date();
+    let year = parts[3] ? Number(parts[3]) : now.getFullYear();
+    if (year < 100) year += 2000;
+
+    let hour = Number(parts[4]);
+    const suffix = (parts[7] || '').toLowerCase();
+    if (suffix === 'p' && hour < 12) hour += 12;
+    else if (suffix === 'a' && hour === 12) hour = 0;
+
+    let date = new Date(
+      year,
+      Number(parts[1]) - 1,
+      Number(parts[2]),
+      hour,
+      Number(parts[5]),
+      Number(parts[6] || 0)
+    );
+    // No year on the card: a date further ahead than tomorrow is last year's.
+    if (!parts[3] && date.getTime() > now.getTime() + 86400000) {
+      date = new Date(date.setFullYear(date.getFullYear() - 1));
     }
-    if (stamps.length < 2) return 'oldest-first';
-    return stamps[0] > stamps[stamps.length - 1] ? 'newest-first' : 'oldest-first';
+    return Number.isFinite(date.getTime()) ? date.getTime() : 0;
   }
 
   /** The post a control belongs to, read at click time so it is never stale. */
@@ -489,7 +910,9 @@
       // An image-only post still counts: its header text keeps it identifiable.
       const text = previewOf(row) || collapse(row.textContent || '').slice(0, 160);
       if (!text) {
-        row.classList.remove('tpp-post');
+        // Not a post any more (a placeholder, or a node Teams emptied): it
+        // keeps no controls, and no card can be left behind on it.
+        clearPostUi(row);
         continue;
       }
 
@@ -564,12 +987,29 @@
   function applyViewFiltering() {
     let anyArchived = false;
     for (const row of document.querySelectorAll('.tpp-post')) {
+      // A node this scan does not know as a post — a recycled wrapper, a copy
+      // Teams left behind — keeps no controls: a rail of its own would float in
+      // the list with no post under it, which is how a lone Archive/Pin pair
+      // appeared in the middle of an empty Archive.
+      const record = row.dataset.tppId ? rowsById.get(row.dataset.tppId) : null;
+      if (record ? record.row !== row : row.dataset.tppModal !== '1') {
+        clearPostUi(row);
+        continue;
+      }
+
       const isArchived = Boolean(row.dataset.tppId && archive[row.dataset.tppId]);
       setTag(row, isArchived ? 'archive' : '');
       paintRow(row, row.dataset.tppNativePin === '1');
       if (isArchived) anyArchived = true;
     }
     publishArchivePresence(anyArchived);
+  }
+
+  /** Takes our own controls and marks off a row that is no longer a post. */
+  function clearPostUi(row) {
+    row.classList.remove('tpp-post', 'tpp-unfold', 'tpp-previewed');
+    delete row.dataset.tppPainted;
+    for (const el of row.querySelectorAll('[data-tpp-ui]')) el.remove();
   }
 
   /**
@@ -584,7 +1024,7 @@
   function publishArchivePresence(anyArchived) {
     const html = document.documentElement;
     if (!html) return;
-    if (features && features.inboxZero && anyArchived) {
+    if (features && channelMode && features.inboxZero && anyArchived) {
       if (!html.hasAttribute(HAS_ARCHIVES_ATTR)) html.setAttribute(HAS_ARCHIVES_ATTR, '');
     } else if (html.hasAttribute(HAS_ARCHIVES_ATTR)) {
       html.removeAttribute(HAS_ARCHIVES_ATTR);
@@ -618,6 +1058,9 @@
     // has opened stays open across Teams re-renders.
     markBody(row);
     markHead(row);
+    markDetails(row);
+    // The folded card: who wrote it, the headline, and the first two lines.
+    paintPreview(row);
     if (row.dataset.tppId && unfolded.has(row.dataset.tppId)) row.classList.add('tpp-unfold');
     else row.classList.remove('tpp-unfold');
 
@@ -639,10 +1082,6 @@
       injectActions(row, tag === 'archive', nativePinned);
     }
 
-    row.classList.toggle(
-      'tpp-post--archived',
-      Boolean(features.inboxZero) && view === VIEW_ARCHIVES && tag === 'archive'
-    );
   }
 
   /** Repaint one post the moment it is archived or unarchived. */
@@ -879,20 +1318,57 @@
     const where = anchorFor(id);
 
     if (wantArchived) {
-      archive[id] = { t: Date.now() };
-    } else {
-      delete archive[id];
+      // The tag is what hides a post, so it is written once the post has left:
+      // one that disappears in the same frame reads as a glitch, not an archive.
+      const row = findRow(id);
+      animateArchiveOut(row ? [row] : [], () => {
+        archive[id] = { t: Date.now() };
+        saveArchiveSoon();
+        paintArchived(id, true);
+        scan();
+        toast('Archived — hidden from your Inbox.', where);
+      });
+      return;
     }
 
+    delete archive[id];
     saveArchiveSoon();
     // Answer the click at once: Teams can re-render the row before the next
     // scan, and a button that appears to do nothing is worse than a stale row.
-    paintArchived(id, wantArchived);
+    paintArchived(id, false);
     scan();
-    toast(
-      wantArchived ? 'Archived — hidden from your Inbox.' : 'Unarchived — back in your Inbox.',
-      where
+    toast('Unarchived — back in your Inbox.', where);
+  }
+
+  /**
+   * A post leaving the list is not made to vanish: it slides to the right and
+   * fades, so the eye sees it go. `done` runs when the last one has left.
+   */
+  function animateArchiveOut(rows, done) {
+    const live = Array.from(rows).filter(
+      (row) => row && row.isConnected && row.getClientRects().length
     );
+    if (!live.length) {
+      done();
+      return;
+    }
+
+    live.forEach((row, index) => {
+      row.classList.remove('tpp-archiving');
+      row.style.setProperty('--tpp-archive-delay', `${Math.min(index, 6) * 30}ms`);
+      // Restart the animation on a row that is already running one.
+      void row.offsetWidth;
+      row.classList.add('tpp-archiving');
+    });
+
+    const total = ARCHIVE_ANIM_MS + Math.min(live.length - 1, 6) * 30;
+    setTimeout(() => {
+      for (const row of live) {
+        row.classList.remove('tpp-archiving');
+        row.style.removeProperty('--tpp-archive-delay');
+      }
+      done();
+    }, total);
   }
 
   function togglePin(id) {
@@ -927,31 +1403,64 @@
   /**
    * Archive every post older than the seam the user is hovering.
    *
-   * Which side of the line is older is a property of the posts, not of where
-   * they sit on screen: the cut is the timestamp of the older of the two posts
-   * either side of the seam, and every post at or below it is archived. That
-   * holds whether the channel lists newest first or oldest first, and after the
-   * user flips that setting.
+   * Which side of the line is older is decided by the two posts either side of
+   * it — the date and time each one shows, not where they sit on screen — so it
+   * is right whether the channel lists newest first, oldest first, or after the
+   * user flips that setting in Teams. Everything on the older side is archived.
    */
-  function archiveOlderPosts(boundaryId, olderTs) {
-    const rows = Array.from(rowsById.values());
+  function archiveOlderPosts(aboveId, belowId) {
+    const rows = rowsInPaintOrder();
     if (!rows.length) return;
 
-    let targets;
-    const cut = Number(olderTs) || 0;
-    if (cut > 0) {
-      targets = rows.filter((record) => record.ts > 0 && record.ts <= cut);
+    // The seam's own two posts, looked up by id: the post above the line and the
+    // post below it. Positions are never assumed, since the map is not the list.
+    const belowIndex = rows.findIndex((record) => record.id === belowId);
+    if (belowIndex < 0) return;
+    const aboveIndex = rows.findIndex((record) => record.id === aboveId);
+    const above = aboveIndex >= 0 ? rows[aboveIndex] : null;
+    const below = rows[belowIndex];
+
+    // The two dates the button is asked to compare: the time printed on each
+    // post's card, and the stamp behind it. Newest-first lists show the newer
+    // post above the line, so there the older side is below it.
+    const aboveTs = above ? previewTimeOf(above.row) || above.ts : 0;
+    const belowTs = previewTimeOf(below.row) || below.ts;
+
+    let olderIsBelow;
+    if (aboveTs > 0 && belowTs > 0 && aboveTs !== belowTs) {
+      olderIsBelow = belowTs < aboveTs;
     } else {
-      // No readable timestamp on either side (a Teams build without ids or
-      // <time>): fall back to the order the posts are listed in.
-      const index = rows.findIndex((record) => record.id === boundaryId);
-      if (index < 0) return;
-      const newestFirst = sortDirection() === 'newest-first';
-      targets = newestFirst ? rows.slice(index) : rows.slice(0, index);
+      // The pair itself is undated (the same minute, or a build without ids):
+      // the first and last dated post on screen still say which way the list
+      // runs. Only when nothing at all is dated does it come down to a guess,
+      // and Teams' channel posts run newest first, top to bottom.
+      const dated = rows
+        .map((record) => previewTimeOf(record.row) || record.ts || 0)
+        .filter((ts) => ts > 0);
+      olderIsBelow = dated.length > 1 ? dated[dated.length - 1] < dated[0] : true;
+    }
+
+    // Everything from the line to the end of the older side.
+    let targets = olderIsBelow ? rows.slice(belowIndex) : rows.slice(0, belowIndex);
+
+    // And a check on the dates themselves: a post known to be newer than both
+    // posts at the seam is never archived. If that empties the side, the side
+    // itself was the wrong one, so the other side is taken instead.
+    if (aboveTs > 0 && belowTs > 0) {
+      const cut = Math.min(aboveTs, belowTs);
+      const onlyOlder = (list) =>
+        list.filter((record) => {
+          const ts = previewTimeOf(record.row) || record.ts;
+          return !ts || ts <= cut;
+        });
+      const kept = onlyOlder(targets);
+      targets = kept.length
+        ? kept
+        : onlyOlder(olderIsBelow ? rows.slice(0, belowIndex) : rows.slice(belowIndex));
     }
 
     const now = Date.now();
-    let added = 0;
+    const leaving = [];
     let keptPinned = 0;
     for (const record of targets) {
       if (archive[record.id]) continue;
@@ -961,25 +1470,34 @@
         keptPinned += 1;
         continue;
       }
-      archive[record.id] = { t: now };
-      added += 1;
+      leaving.push(record);
     }
 
+    const added = leaving.length;
+    gapZone = null;
+    hideGap();
+
     if (!added) {
-      hideGap();
       toast('Everything on that side is already archived.');
       return;
     }
 
-    saveArchiveSoon();
     savePinsSoon();
-    gapZone = null;
-    hideGap();
-    scan();
-    // Not one post's doing, so this message sits in the middle of the list.
-    toast(
-      `Archived ${added} older post${added === 1 ? '' : 's'}.` +
-        (keptPinned ? ' Pinned posts were left alone.' : '')
+    // Nothing is tagged until the last post has slid away: the tag is what
+    // hides a post, and hiding them first would leave only the animation of a
+    // list that had already collapsed.
+    animateArchiveOut(
+      leaving.map((record) => record.row),
+      () => {
+        for (const record of leaving) archive[record.id] = { t: now };
+        saveArchiveSoon();
+        scan();
+        // Not one post's doing, so this message sits in the middle of the list.
+        toast(
+          `Archived ${added} older post${added === 1 ? '' : 's'}.` +
+            (keptPinned ? ' Pinned posts were left alone.' : '')
+        );
+      }
     );
   }
 
@@ -1806,13 +2324,6 @@
     const skins = posts ? tabSkins(posts) : null;
 
     for (const button of wrap.querySelectorAll('.tpp-tab')) {
-      // The compact switch is not a view: it only carries a pressed state.
-      if (button.classList.contains('tpp-compact-toggle')) {
-        button.classList.toggle('is-on', Boolean(features.compactPosts));
-        button.setAttribute('aria-pressed', features.compactPosts ? 'true' : 'false');
-        continue;
-      }
-
       const active = view === button.dataset.mode;
       if (skins) {
         skinTab(button, active ? skins.selected : skins.idle, active);
@@ -1862,35 +2373,6 @@
   }
 
   /**
-   * The compact switch, beside the tabs: the same control the popup has, put
-   * where the posts are so it can be flipped while looking at them. It writes
-   * through the feature registry, so the popup and the other devices follow.
-   */
-  function compactToggle() {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'tpp-tab tpp-compact-toggle';
-    button.dataset.tppUi = 'compact-toggle';
-    button.title = 'Compact posts: one line of text per post';
-    button.setAttribute('aria-label', button.title);
-    button.innerHTML = COMPACT_SVG;
-
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      setFeature('compactPosts', !features.compactPosts);
-    });
-    return button;
-  }
-
-  /** Flips one feature and writes it to sync storage, exactly as the popup does. */
-  function setFeature(id, value) {
-    features = { ...features, [id]: Boolean(value) };
-    writeSync({ [STORAGE_KEY]: features });
-    apply();
-  }
-
-  /**
    * The pair. Each tab is a copy of Teams' own Posts tab (see cloneTab), so the
    * strip's type, padding, height, colour and selected bar come from Teams and
    * follow a theme change without anything being hard-coded here.
@@ -1927,7 +2409,6 @@
       wrap.append(button);
     }
 
-    wrap.append(compactToggle());
     return wrap;
   }
 
@@ -2273,24 +2754,47 @@
 
   // ------------------------------------------------------- hover between posts
 
+  /**
+   * Posts as they are drawn, top to bottom. The map's own order comes from the
+   * DOM, which is not the same thing: a list drawn bottom-up (column-reverse)
+   * lists the newest post last while showing it at the top, and reading the
+   * order off the map is what once pointed the seam at the wrong pair.
+   */
+  function rowsInPaintOrder() {
+    return Array.from(rowsById.values())
+      .filter((record) => record.row.isConnected && record.row.getClientRects().length)
+      .sort((a, b) => a.row.getBoundingClientRect().top - b.row.getBoundingClientRect().top);
+  }
+
   /** Recompute the seams between two visible posts, top to bottom. */
   function refreshGapZones() {
     const zones = [];
     if (features && features.inboxZero && view === VIEW_INBOX) {
       let previous = null;
-      for (const record of rowsById.values()) {
-        const rect = record.row.getBoundingClientRect();
-        // Archived (and therefore hidden), or the post opened in its panel.
-        if (!rect.height || record.row.dataset.tppModal === '1') continue;
+      for (const record of rowsInPaintOrder()) {
+        const row = record.row;
+        // The post opened in its panel is over the page, not in the stream.
+        if (row.dataset.tppModal === '1') continue;
+
+        // The box the user actually sees. A folded post is its card, and the
+        // row around the card carries padding that would pull the seam down,
+        // which is what made the line sit nearer the post below.
+        const box = row.querySelector(':scope > [data-tpp-ui="preview"]') || row;
+        const rect = box.getBoundingClientRect();
+        const column = row.getBoundingClientRect();
+        if (!rect.height) continue;
+
         if (previous) {
-          const y = (previous.rect.bottom + rect.top) / 2;
           zones.push({
-            y,
-            boundaryId: record.id,
-            // Everything older than this seam is everything older than the
-            // older of the two posts either side of it — the posts' own
-            // timestamps decide, so the direction they are listed in does not.
-            olderTs: Math.min(previous.record.ts || 0, record.ts || 0)
+            // Halfway between the bottom of one post's box and the top of the
+            // next, so the line is centred in the gap between them.
+            y: (previous.rect.bottom + rect.top) / 2,
+            // The seam's two posts by id: which of them is above the line is a
+            // fact of the drawing, not of the map.
+            aboveId: previous.record.id,
+            belowId: record.id,
+            left: Math.max(column.left, 0),
+            width: Math.max(column.width, 240)
           });
         }
         previous = { rect, record };
@@ -2319,7 +2823,11 @@
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      archiveOlderPosts(el.dataset.boundary || '', Number(el.dataset.olderTs) || 0);
+      // The pointer is still on the spot the line was: without this the next
+      // mousemove would put the control straight back after the click.
+      gapMuteUntil = Date.now() + 700;
+      hideGap();
+      archiveOlderPosts(el.dataset.above || '', el.dataset.below || '');
     });
 
     el.append(line, button);
@@ -2331,11 +2839,14 @@
   function showGap(zone) {
     if (!listRect) return;
     const el = ensureGapEl();
-    el.dataset.boundary = zone.boundaryId;
-    el.dataset.olderTs = String(zone.olderTs || 0);
+    el.dataset.above = zone.aboveId;
+    el.dataset.below = zone.belowId;
     el.style.top = `${zone.y}px`;
-    el.style.left = `${listRect.left + 8}px`;
-    el.style.width = `${Math.max(listRect.width - 16, 200)}px`;
+    // No wider than the post it sits between: the line belongs to the stream,
+    // not to the whole pane.
+    const width = Math.max(Math.min(zone.width, window.innerWidth - zone.left), 240);
+    el.style.left = `${zone.left}px`;
+    el.style.width = `${width}px`;
     el.classList.add('is-on');
   }
 
@@ -2343,24 +2854,35 @@
     document.getElementById(GAP_ID)?.classList.remove('is-on');
   }
 
-  function updateGapHover(event) {
-    // A pinned post is over the page: nothing behind it answers the pointer.
+  /** The pointer's last known position, so the control can be re-checked later. */
+  let pointerX = 0;
+  let pointerY = 0;
+  let pointerSeen = false;
+  /** A short quiet spell after a click, so the control cannot blink back. */
+  let gapMuteUntil = 0;
+
+  /**
+   * Decides, for one point, whether a seam is close enough to offer the control.
+   *
+   * Every case ends in a definite answer, shown or hidden, so calling it again
+   * without the pointer moving is safe: it is how the control is cleared when
+   * the seams move under a resting cursor, the list re-renders, or the view is
+   * switched by something other than a mousemove.
+   */
+  function evaluateGap(x, y) {
     if (
       !ready ||
+      !channelMode ||
       !features ||
       !features.inboxZero ||
       view !== VIEW_INBOX ||
-      !listRect
+      !listRect ||
+      Date.now() < gapMuteUntil
     ) {
       hideGap();
       return;
     }
 
-    // Keep the control while the pointer travels onto its button.
-    if (gapZone && gapZone.contains(event.target)) return;
-
-    const x = event.clientX;
-    const y = event.clientY;
     if (x < listRect.left - 4 || x > listRect.right + 4) {
       hideGap();
       return;
@@ -2378,6 +2900,29 @@
       return;
     }
     showGap(best.zone);
+  }
+
+  /** Re-checks the point the pointer is resting on, without a new event. */
+  function recheckGap() {
+    if (!pointerSeen) return;
+    evaluateGap(pointerX, pointerY);
+  }
+
+  function updateGapHover(event) {
+    pointerX = event.clientX;
+    pointerY = event.clientY;
+    pointerSeen = true;
+
+    // Keep the control while the pointer travels onto its own button.
+    if (
+      gapZone &&
+      gapZone.classList.contains('is-on') &&
+      gapZone.contains(event.target)
+    ) {
+      return;
+    }
+
+    evaluateGap(pointerX, pointerY);
   }
 
   function onPointerMove(event) {
@@ -2485,7 +3030,7 @@
   }
 
   function reposition() {
-    if (!ready || frame) return;
+    if (!ready || !channelMode || frame) return;
     frame = requestAnimationFrame(() => {
       frame = 0;
       const list = findMessageList();
@@ -2657,6 +3202,26 @@
   function scan() {
     if (!ready) return;
 
+    // Teams changes view without a page load, so the question is asked again on
+    // every scan. In a chat (or anywhere that is not a channel) the flags come
+    // off and whatever was drawn in a channel is taken down. `null` means the
+    // page is still settling, and then nothing is decided either way — a
+    // channel is never torn down because its posts have not rendered yet.
+    const verdict = channelVerdict();
+    if (verdict !== null && verdict !== channelMode) {
+      channelMode = verdict;
+      syncFeatureFlags();
+    }
+    if (channelMode === false) {
+      teardownChannelUi();
+      return;
+    }
+    if (channelMode !== true) return;
+
+    // The channel is the nearest painted thing to a post, so it is the best
+    // answer to "is this page dark?" — and a scan is already running.
+    applyTheme();
+
     // Teams swaps channels in place, and a pin belongs to its channel: the
     // bars have to move to the new channel's pins before anything is drawn.
     syncPinChannel();
@@ -2721,6 +3286,9 @@
       }
 
       refreshGapZones();
+      // The seams have just moved or gone: re-check where the pointer is, so the
+      // control cannot outlive the gap it was describing.
+      recheckGap();
     } finally {
       if (observer) {
         observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -2743,23 +3311,12 @@
     const html = document.documentElement;
     if (!html) return;
 
-    for (const feature of FEATURES) {
-      if (features[feature.id]) html.setAttribute(feature.attr, '');
-      else html.removeAttribute(feature.attr);
-    }
-
-    // The tag alone decides which view shows a post (teams.css), so the view is
-    // published once here and a Teams re-render cannot resurrect a hidden post.
-    if (features.inboxZero) html.setAttribute('data-tpp-view', view);
-    else html.removeAttribute('data-tpp-view');
+    syncFeatureFlags();
 
     if (!features.inboxZero) {
       html.removeAttribute(HAS_ARCHIVES_ATTR);
       for (const el of document.querySelectorAll('.tpp-list')) el.classList.remove('tpp-list');
       releaseListDepth();
-      for (const el of document.querySelectorAll('.tpp-post--archived')) {
-        el.classList.remove('tpp-post--archived');
-      }
       // Forget the cached paint so every post's buttons are rebuilt.
       for (const el of document.querySelectorAll('.tpp-post')) {
         delete el.dataset.tppPainted;
@@ -2773,6 +3330,135 @@
     if (!features.inboxZero && !features.pinnedMessages) clearLeftInset();
 
     scan();
+  }
+
+  /**
+   * Is the page on screen a channel's Posts area?
+   *
+   *   true  — a channel: Teams++ runs here,
+   *   false — anywhere else (a chat, Calendar, Files, Calls, the activity feed),
+   *   null  — the page is still settling, so nothing is decided yet.
+   *
+   * The page itself is asked before the route. Teams has changed its URLs more
+   * than once — new Teams can sit on a bare path while a channel is open — and a
+   * URL-only answer is what switched the extension off everywhere. Channel-only
+   * furniture cannot be faked: a Posts tab, a channel tab strip, a post row, or
+   * the "Post in channel" box exists in a channel and nowhere else. A chat is
+   * settled first and against the DOM as well, because a chat pane on screen is
+   * never ours whatever else Teams has left mounted.
+   */
+  function channelVerdict() {
+    const href = String(location.href || '');
+    const chatRoute = /\/chat\//i.test(href) || /[?&#]context=chat/i.test(href);
+    if (chatRoute) return false;
+
+    const visible = (el) => Boolean(el && el.getClientRects().length);
+
+    // A chat's list or a chat message on screen: this is a chat.
+    if (visible(document.querySelector('[data-tid="chat-pane-message-list"]'))) return false;
+    if (visible(document.querySelector('[data-tid="chat-pane-message"]'))) return false;
+
+    // Channel-only furniture. The Posts tab is the surest: chats have no tab
+    // strip at all, and every channel has one.
+    if (nativePostsTab()) return true;
+    if (
+      visible(
+        document.querySelector(
+          '[role="tab"][value*="channeltabs" i], [role="tab"][id*="channeltabs" i]'
+        )
+      )
+    ) {
+      return true;
+    }
+    if (
+      visible(
+        document.querySelector(
+          '[data-tid="post-message-subheader"], [data-tid="post-message"], [data-tid="channel-pane-message-list"]'
+        )
+      )
+    ) {
+      return true;
+    }
+    if (
+      visible(
+        document.querySelector(
+          '[data-tid="post-compose-collapsed"], [data-tid*="post-in-channel" i], [data-tid*="channel-compose" i]'
+        )
+      )
+    ) {
+      return true;
+    }
+
+    // The route, when it names a channel.
+    if (/\/channel\//i.test(href) || /[?&](groupId|channelId)=/i.test(href)) return true;
+
+    // The list we would work on: a channel's message list is ours, a chat's is
+    // not, and no list at all means the page has not settled.
+    const list = findMessageList();
+    if (list) {
+      if (list.closest('[data-tid*="chat-pane" i]')) return false;
+      if (list.querySelector('[data-tid="post-message"], [data-tid="post-message-subheader"]')) {
+        return true;
+      }
+      return false;
+    }
+
+    return null;
+  }
+
+  /**
+   * Writes the feature flags onto <html>, which is what teams.css hangs every
+   * style off. Outside a channel they all come off, so a chat is never dressed
+   * as a channel's Posts list even for a moment.
+   */
+  function syncFeatureFlags() {
+    const html = document.documentElement;
+    if (!html || !features) return;
+
+    for (const feature of FEATURES) {
+      if (channelMode && features[feature.id]) html.setAttribute(feature.attr, '');
+      else html.removeAttribute(feature.attr);
+    }
+
+    // The tag alone decides which view shows a post (teams.css), so the view is
+    // published once here and a Teams re-render cannot resurrect a hidden post.
+    if (channelMode && features.inboxZero) html.setAttribute('data-tpp-view', view);
+    else html.removeAttribute('data-tpp-view');
+
+    if (!channelMode) html.removeAttribute(HAS_ARCHIVES_ATTR);
+  }
+
+  /**
+   * Takes down everything Teams++ drew, for a page that is not a channel.
+   *
+   * The flags already stop the styles; this removes what was injected into the
+   * page itself — tabs, pin bars, the empty state, the seam control, the rail and
+   * every mark on a row — so a chat is exactly as Teams made it.
+   */
+  function teardownChannelUi() {
+    for (const id of [TABS_ID, STACK_ID, EMPTY_ID, GAP_ID, TOAST_ID, PIN_COPY_ID]) {
+      document.getElementById(id)?.remove();
+    }
+    hideSearchCancel();
+
+    gapZone = null;
+    gapZones = [];
+    toastAnchor = null;
+    lastList = null;
+    listRect = null;
+
+    releaseNativeTab();
+    clearTopInset();
+    clearLeftInset();
+    releaseListDepth();
+
+    for (const el of document.querySelectorAll('.tpp-list')) el.classList.remove('tpp-list');
+    for (const el of document.querySelectorAll('.tpp-post')) clearPostUi(el);
+    for (const el of document.querySelectorAll('[data-tpp-placeholder]')) {
+      delete el.dataset.tppPlaceholder;
+    }
+
+    document.documentElement.removeAttribute(HAS_ARCHIVES_ATTR);
   }
 
   async function bootstrap() {
@@ -2811,12 +3497,33 @@
 
     document.documentElement.setAttribute('data-tpp-build', BUILD);
 
+    // Paint the right theme before anything of ours is drawn.
+    applyTheme();
+
+    // Teams flips light and dark by swapping a class or an attribute rather
+    // than reloading, so watch for that and for the OS setting. Both are cheap:
+    // applyTheme does nothing unless the answer actually changed.
+    const themeWatch = new MutationObserver(() => applyTheme());
+    for (const node of [document.documentElement, document.body]) {
+      if (!node) continue;
+      themeWatch.observe(node, {
+        attributes: true,
+        attributeFilter: ['class'].concat(THEME_HINTS)
+      });
+    }
+    if (window.matchMedia) {
+      const scheme = window.matchMedia('(prefers-color-scheme: dark)');
+      const onChange = () => applyTheme();
+      if (scheme.addEventListener) scheme.addEventListener('change', onChange);
+      else if (scheme.addListener) scheme.addListener(onChange);
+    }
+
     observer = new MutationObserver(scheduleScan);
     observer.observe(document.documentElement, { childList: true, subtree: true });
 
     // Restore the feature flags if Teams rewrites <html>.
     new MutationObserver(() => {
-      if (!ready) return;
+      if (!ready || !channelMode) return;
       const html = document.documentElement;
       const missing = FEATURES.some(
         (feature) => features[feature.id] && !html.hasAttribute(feature.attr)
@@ -2837,6 +3544,12 @@
     // The gap control follows the pointer, so only a mousemove can reveal it.
     document.addEventListener('mousemove', onPointerMove, { passive: true });
     document.addEventListener('mouseleave', hideGap);
+    // A resting cursor produces no mousemove, and neither does a keyboard or a
+    // window switch, so the control is cleared by those too.
+    window.addEventListener('blur', hideGap);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) hideGap();
+    });
 
     bootstrap();
   }

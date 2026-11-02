@@ -92,6 +92,32 @@
     ],
 
     /**
+     * The picture Teams draws for a post's author. The compact card shows it at
+     * the top of the card, so it is read from the post rather than guessed. It
+     * may be an <img> or a painted background; either is used.
+     */
+    messageAvatar: [
+      '[data-tid*="avatar" i]',
+      '[data-tid*="profile-picture" i]',
+      '[data-tid*="profilephoto" i]',
+      '[class*="fui-Avatar" i]',
+      '[class*="persona" i] img',
+      'img[alt*="avatar" i]',
+      '[aria-label*="profile picture" i]'
+    ],
+
+    /**
+     * A post's subject, when Teams renders one beside the author. Posts without
+     * one fall back to the first line of the text, which is where a channel post
+     * usually puts its headline anyway.
+     */
+    messageSubject: [
+      '[id^="subject-"]',
+      '[data-tid="post-message-subject"]',
+      '[data-tid*="post-subject" i]'
+    ],
+
+    /**
      * Ancestors that mean a row is a comment or a reply rather than a post.
      * Only posts get archive/pin buttons, so matches here are skipped. Teams
      * prefixes comment markup with `comment-message-*`, which the second entry

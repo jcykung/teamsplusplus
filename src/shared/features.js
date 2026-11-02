@@ -41,7 +41,7 @@
       id: 'compactPosts',
       attr: 'data-tpp-compact-posts',
       label: 'Compact posts',
-      hint: 'Shows every post as a header line and one line of its text — about the height of the archive and pin buttons — so many more posts fit on a screen. The switch beside the Inbox and Archive tabs does the same thing.',
+      hint: 'Shows every post as a card: the author, the time, the headline and the first two lines, with unread and Last read carried over from Teams. Replies, reactions and images stay folded away until you open a post.',
       default: true
     }
   ];

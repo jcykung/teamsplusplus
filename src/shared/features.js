@@ -9,16 +9,23 @@
  * follows the user to every Chrome profile signed in with the same account:
  *
  *   teamsPlusPlus.features  on/off switches for the two features
- *   teamsPlusPlus.archive   post id -> { c: reply count at archive time, t: time }
+ *   teamsPlusPlus.unread    post id -> { t: time, r: 0 unread | 1 read }, the
+ *                           few posts whose state is not the default. A post
+ *                           with no entry is read, so a channel's whole history
+ *                           costs nothing until it is unread again.
  *   teamsPlusPlus.pins      post id -> { x: preview, a: author, t: time }
- *   teamsPlusPlus.view      "inbox" (archived posts hidden) or "archives"
- *                           (only archived posts shown)
+ *   teamsPlusPlus.view      "inbox" (read posts hidden) or "archives"
+ *                           (only read posts shown)
  */
 (function (root) {
   'use strict';
 
   const STORAGE_KEY = 'teamsPlusPlus.features';
-  const ARCHIVE_KEY = 'teamsPlusPlus.archive';
+  const UNREAD_KEY = 'teamsPlusPlus.unread';
+  /** The map the build before read state kept its archive tags in. */
+  const LEGACY_ARCHIVE_KEY = 'teamsPlusPlus.archive';
+  /** When the extension was installed, in ms: posts stamped later are unread. */
+  const SINCE_KEY = 'teamsPlusPlus.since';
   const PINS_KEY = 'teamsPlusPlus.pins';
   const VIEW_KEY = 'teamsPlusPlus.view';
 
@@ -27,21 +34,21 @@
       id: 'inboxZero',
       attr: 'data-tpp-inbox-zero',
       label: 'Inbox Zero',
-      hint: 'Adds Archive and Pin buttons to the left margin of every post. A post with no tag is in your Inbox; archiving tags it archive, Unarchive removes the tag again, and the Inbox and Archive tabs stand in for the channel tab bar’s Posts tab to show one or the other.',
+      hint: 'Adds Archive and Pin buttons to the left margin of every post. A post is read or unread: unread posts are your Inbox, and archiving marks a post read and files it in Archive. Anything posted after you installed Teams++ starts in the Inbox; everything already in the channel at install is read. Teams’ own New and Last read markers are no longer shown — the tabs say where you are.',
       default: true
     },
     {
       id: 'pinnedMessages',
       attr: 'data-tpp-pinned-messages',
       label: 'Pinned message bars',
-      hint: 'Shows pinned posts as purple bars at the top of the channel. Click a bar to jump to the post where it sits in the stream; a pinned post cannot be archived until it is unpinned.',
+      hint: 'Shows pinned posts as purple bars at the top of the channel. Click a bar to jump to the post where it sits in the stream; a pinned post shows only its Pin button until it is unpinned.',
       default: true
     },
     {
       id: 'compactPosts',
       attr: 'data-tpp-compact-posts',
       label: 'Compact posts',
-      hint: 'Shows every post as a card: the author, the time, the headline and the first two lines, with unread and Last read carried over from Teams. Replies, reactions and images stay folded away until you open a post.',
+      hint: 'Shows every post as a card: the author, the time, the headline and the first two lines. Replies, reactions and images stay folded away until you open a post.',
       default: true
     }
   ];
@@ -166,7 +173,9 @@
 
   root.TeamsPlusPlus = {
     STORAGE_KEY,
-    ARCHIVE_KEY,
+    UNREAD_KEY,
+    LEGACY_ARCHIVE_KEY,
+    SINCE_KEY,
     PINS_KEY,
     VIEW_KEY,
     FEATURES,

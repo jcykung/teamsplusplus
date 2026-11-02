@@ -3,14 +3,14 @@
  *
  * Two features live here:
  *
- *   Inbox Zero      Every post gets Archive / Pin buttons in its left margin;
- *                   comments and replies never get them. A post carries no tag
- *                   until it is archived: archiving tags it "archive" and
- *                   unarchiving removes the tag again, so an untagged post is
- *                   an Inbox post. The Inbox and Archive tabs sit in the
- *                   channel tab bar in the Posts tab's place and filter on that
- *                   tag. Hovering the space between two posts offers
- *                   "Archive all older posts".
+ *   Inbox Zero      Every post is read or unread, and every post gets Archive /
+ *                   Pin buttons in its left margin; comments and replies never
+ *                   get them. Read state is Teams++'s own: the moment the
+ *                   extension was installed is stored once, and a post stamped
+ *                   later is unread until the Archive button files it.
+ *                   Everything already in the channel is read. Teams' New
+ *                   badge and Last read line are not shown — the Inbox and
+ *                   Archive tabs are the marker now.
  *
  *   Pinned posts    Pinned posts sit in purple bars directly under the channel
  *                   menu bar, above the "Post in channel" box. A bar jumps to the
@@ -31,7 +31,9 @@
 
   const {
     STORAGE_KEY,
-    ARCHIVE_KEY,
+    UNREAD_KEY,
+    LEGACY_ARCHIVE_KEY,
+    SINCE_KEY,
     PINS_KEY,
     VIEW_KEY,
     FEATURES,
@@ -45,10 +47,17 @@
   } = globalThis.TeamsPlusPlus;
   const S = globalThis.TeamsPlusPlusSelectors;
 
-  const ARCHIVE_LIMIT = 150;
+  /**
+   * Read/unread decisions the user made, kept in storage. Only a click needs an
+   * entry: with no entry a post is judged by its timestamp against `since`, so a
+   * channel's history costs nothing.
+   */
+  const READ_LIMIT = 240;
   /** Pins kept in one channel, and channels whose pins are kept at all. */
   const PIN_LIMIT = 40;
   const PIN_CHANNEL_LIMIT = 40;
+  /** Pins are filed by channel id, under this prefix. */
+  const CHANNEL_PREFIX = 'channel:';
 
   const VIEW_INBOX = 'inbox';
   const VIEW_ARCHIVES = 'archives';
@@ -57,13 +66,14 @@
   const STACK_ID = 'tpp-pin-stack';
   const EMPTY_ID = 'tpp-empty-state';
   const PIN_COPY_ID = 'tpp-pin-copy';
-  const GAP_ID = 'tpp-gap';
   const TOAST_ID = 'tpp-toast';
   /** How long a post takes to slide out of the Inbox when it is archived. */
   const ARCHIVE_ANIM_MS = 300;
   const HAS_ARCHIVES_ATTR = 'data-tpp-has-archives';
+  /** Set when the current view has no post on show at all (teams.css). */
+  const EMPTY_VIEW_ATTR = 'data-tpp-empty-view';
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-01.31';
+  const BUILD = '2026-11-01.50';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -76,7 +86,6 @@
   ];
 
   /** How close the pointer must be to the seam between two posts, in px. */
-  const GAP_TOLERANCE = 14;
 
   /** Width of the left margin the post buttons float in, in px. */
   const RAIL_GUTTER = 32;
@@ -97,19 +106,16 @@
   /** The small chevron on a folded post's card: this card opens. */
   const CHEVRON_SVG =
     '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
-  const CONFETTI_COLORS = [
-    '#6264a7',
-    '#8b5cf6',
-    '#c4b5fd',
-    '#f472b6',
-    '#fbbf24',
-    '#34d399',
-    '#60a5fa'
-  ];
-
   let ready = false;
   let features = null;
-  let archive = {};
+  /**
+   * id -> { t, r, c } — the decisions the user made: r: 0 unread, 1 read, and
+   * c: 1 for a click (which is what lets the row close up behind itself). A post
+   * with no entry is judged by its timestamp against `since`, below.
+   */
+  let readState = {};
+  /** When the extension was installed, in ms. Posts stamped later are unread. */
+  let since = 0;
   /**
    * Every channel's pins, keyed by channel path, and `pins` as the bucket of
    * the channel on screen. A pin belongs to the channel it was made in, so the
@@ -126,16 +132,13 @@
    * off) only while this is true.
    */
   let channelMode = null;
+  /** The element carrying the room after the rows: see markRoom. */
+  let roomEl = null;
 
-  /** id -> { row, text, author, replies, archived } for the latest scan. */
+  /** id -> { row, id, text, author, read, ts } for the latest scan. */
   let rowsById = new Map();
   /** id -> { id, text, author } for posts Teams itself has pinned. */
   let nativePins = new Map();
-
-  /** Seams between two visible posts, in viewport coordinates, top to bottom. */
-  let gapZones = [];
-  /** The drawn gap control's box is reused; only its position changes. */
-  let gapZone = null;
 
   let observer = null;
   let lastList = null;
@@ -143,8 +146,6 @@
   let tabsPx = 0;
   /** The channel's own "Posts" tab while our tabs stand in for it. */
   let hiddenNativeTab = null;
-  /** The last post on show, which carries the filler that keeps the list deep. */
-  let depthTail = null;
   /** The walk through the channel that is looking for a pinned post. */
   let pinJump = null;
   let flashTimer = 0;
@@ -153,7 +154,7 @@
   /** Posts the user has unfolded in the compact view, by id. */
   const unfolded = new Set();
   let rescanTimer = 0;
-  let archiveSaveTimer = 0;
+  let readSaveTimer = 0;
   let pinsSaveTimer = 0;
   let frame = 0;
   let toastTimer = 0;
@@ -184,10 +185,7 @@
     if (unfolded.has(id)) unfolded.delete(id);
     else unfolded.add(id);
     row.classList.toggle('tpp-unfold', unfolded.has(id));
-    // Opening a post can put Teams' own divider back on screen, so which line is
-    // shown is decided again at once — otherwise the copy stays beside it and the
-    // post shows two. The row also changed height, so the line is re-measured.
-    refreshLastRead();
+    // The post changed height, so anything placed against it is re-measured.
     reposition();
   }
 
@@ -330,19 +328,7 @@
     const picture = avatarOf(row);
     const timeEl = first(S.messageTime, row);
     const time = timeEl ? collapse(timeEl.textContent || '') : '';
-    // Unread and "last read" are Teams' own markers, and both live in the part
-    // of the row the card hides: they are read here and the card carries them.
-    const unread = isUnreadPost(row);
-    const lastRead = endsLastRead(row);
-    const signature = [
-      author,
-      time,
-      headline,
-      snippet,
-      picture,
-      unread ? 'new' : '',
-      lastRead ? 'seam' : ''
-    ].join('|');
+    const signature = [author, time, headline, snippet, picture].join('|');
 
     let card = row.querySelector(':scope > [data-tpp-ui="preview"]');
     if (card && card.dataset.tppSig === signature) {
@@ -361,7 +347,6 @@
         '<span class="tpp-preview-meta">' +
         '<span class="tpp-preview-name"></span>' +
         '<span class="tpp-preview-time"></span>' +
-        '<span class="tpp-preview-new" hidden>New</span>' +
         '</span>' +
         '<span class="tpp-preview-subject"></span>' +
         '<span class="tpp-preview-snippet"></span>' +
@@ -399,254 +384,7 @@
     const snippetSlot = card.querySelector('.tpp-preview-snippet');
     snippetSlot.textContent = snippet;
     snippetSlot.hidden = !snippet;
-    card.querySelector('.tpp-preview-new').hidden = !unread;
-    paintLastRead(row, lastRead);
     row.classList.add('tpp-previewed');
-  }
-
-  /** Teams' own unread badge on a post, when it renders one. */
-  const NEW_BADGE_SELECTOR =
-    '[data-tid="new-message-badge"], [data-tid*="new-message-status" i]';
-  /** Teams' own "Last read" divider: inside a post, or between two of them. */
-  const LAST_READ_SELECTOR = '[data-tid="last-read-line"], [data-tid*="last-read" i]';
-
-  /** Whether Teams marks this post as unread. */
-  function isUnreadPost(row) {
-    try {
-      return Boolean(row.querySelector(NEW_BADGE_SELECTOR));
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /**
-   * Whether Teams' "Last read" divider closes this post — that is, whether this
-   * is the last post that has been read. Teams ends the divider where the read
-   * section ends, and where that element is rendered varies by build: inside the
-   * last-read post, as its own element between two posts, or at the top of the
-   * first unread one. All three mean the same boundary, and all three put the
-   * line under the post above it — which is what this answers.
-   */
-  function endsLastRead(row) {
-    try {
-      const inside = row.querySelector(LAST_READ_SELECTOR);
-      if (inside) {
-        const head = row.querySelector('.tpp-head');
-        // Below the post's header it is this post's own footer. Above it, it is
-        // the line between the two posts, so it belongs to the one before.
-        if (!head) return true;
-        const aboveHead = Boolean(
-          inside.compareDocumentPosition(head) & Node.DOCUMENT_POSITION_FOLLOWING
-        );
-        if (!aboveHead) return true;
-      }
-
-      // The next post, and any divider rendered between the two of them.
-      let next = row.nextElementSibling;
-      while (next) {
-        if (next.matches(LAST_READ_SELECTOR) || next.querySelector(LAST_READ_SELECTOR)) {
-          return true;
-        }
-        const post = next.classList.contains('tpp-post')
-          ? next
-          : next.querySelector('.tpp-post');
-        if (post) {
-          const inPost = post.querySelector(LAST_READ_SELECTOR);
-          const postHead = post.querySelector('.tpp-head');
-          return Boolean(
-            inPost &&
-              postHead &&
-              inPost.compareDocumentPosition(postHead) & Node.DOCUMENT_POSITION_FOLLOWING
-          );
-        }
-        next = next.nextElementSibling;
-      }
-      return false;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /** Teams' own "Last read" divider for this post, wherever the build puts it. */
-  function nativeLastRead(row) {
-    const inside = row.querySelector(LAST_READ_SELECTOR);
-    if (inside) return inside;
-
-    let next = row.nextElementSibling;
-    while (next) {
-      if (next.matches(LAST_READ_SELECTOR)) return next;
-      const found = next.querySelector(LAST_READ_SELECTOR);
-      if (found) return found;
-      if (next.classList.contains('tpp-post') || next.querySelector('.tpp-post')) return null;
-      next = next.nextElementSibling;
-    }
-    return null;
-  }
-
-  /**
-   * Re-decides the "Last read" line on every post: Teams' own line may have just
-   * appeared (or vanished) with a post being opened, and the copy follows it.
-   */
-  function refreshLastRead() {
-    for (const row of document.querySelectorAll('.tpp-post')) {
-      paintLastRead(row, endsLastRead(row));
-    }
-    syncLastReadBands();
-  }
-
-  /**
-   * Takes the band off any row that no longer carries the line. A stale band is
-   * 26px of empty space of its own, which is how opening and closing a post could
-   * leave the gap above it wider than it was.
-   */
-  function syncLastReadBands() {
-    for (const row of document.querySelectorAll('.tpp-last-read-row')) {
-      if (!row.querySelector(':scope > [data-tpp-ui="last-read"]')) {
-        row.classList.remove('tpp-last-read-row');
-      }
-    }
-  }
-
-  /** Whether an element is actually painted: a hidden one has no boxes. */
-  function hasBox(el) {
-    try {
-      return el.getClientRects().length > 0 && el.getBoundingClientRect().height > 0;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /**
-   * Puts the "Last read" line in the middle of the gap under the post it closes,
-   * measuring from the visible edges of the two posts rather than from the boxes
-   * around them, whose padding would pull the line off centre.
-   */
-  function placeLastRead() {
-    for (const seam of document.querySelectorAll('.tpp-last-read')) {
-      const row = seam.closest('.tpp-post');
-      if (!row) continue;
-
-      // The box the user sees: the card while the post is folded, the post itself
-      // once it is open.
-      const card = row.querySelector(':scope > [data-tpp-ui="preview"]');
-      const open = row.classList.contains('tpp-unfold');
-      const shown = card && !open ? card : row;
-      const rowRect = row.getBoundingClientRect();
-      const box = shown.getBoundingClientRect();
-      if (!box.height) continue;
-
-      // The band under the post belongs to the line, not to the post: measuring
-      // an open row to its padded bottom would put the gap above the line and
-      // drop the line onto the post below.
-      const banded = row.classList.contains('tpp-last-read-row');
-      const band = open && banded ? parseFloat(getComputedStyle(row).paddingBottom) || 0 : 0;
-      const bottom = box.bottom - band;
-
-      let next = row.nextElementSibling;
-      let nextBox = null;
-      while (next) {
-        const post = next.classList.contains('tpp-post')
-          ? next
-          : next.querySelector('.tpp-post');
-        if (post) {
-          // The same box the user sees: a folded post is its card. Its row keeps
-          // padding above the card, and measuring that would pull the line up.
-          const nextCard = post.querySelector('[data-tpp-ui="preview"]');
-          const nextShown =
-            nextCard && !post.classList.contains('tpp-unfold') ? nextCard : post;
-          nextBox = nextShown.getBoundingClientRect();
-          break;
-        }
-        next = next.nextElementSibling;
-      }
-
-      // The middle of the space the user sees: under the last-read post's card
-      // and over the next post's card.
-      const target = nextBox ? (bottom + nextBox.top) / 2 : bottom + 18;
-      const floor = bottom - rowRect.top + 2;
-
-      // The line is measured where it is drawn and moved by the difference, so
-      // any offset between its box and the line inside it (a copied divider with
-      // margins, a clipped one) is taken out instead of assumed away.
-      const drawn = seam.getBoundingClientRect();
-      const top = drawn.height
-        ? (parseFloat(seam.style.top) || 0) + (target - (drawn.top + drawn.height / 2))
-        : bottom - rowRect.top + Math.max((nextBox ? nextBox.top - bottom : 16) / 2, 2) - seam.offsetHeight / 2;
-
-      // Only when it moves: writing the same value on every scan is a mutation,
-      // and a mutation on our own node is what a scan loop feeds on.
-      const nextTop = `${Math.round(Math.max(top, floor))}px`;
-      if (seam.style.top !== nextTop) seam.style.top = nextTop;
-    }
-  }
-
-  /**
-   * Teams' "Last read" divider closes the last-read post, so the folded card
-   * carries a copy of Teams' own divider underneath itself — the line, the word
-   * and the spacing are Teams' own, in Teams' own place and in either theme. It
-   * sits in the row's own flow after the card, so it takes its line and nothing
-   * more: no reserved band, and so no gap over the first unread post.
-   */
-  function paintLastRead(row, wanted) {
-    let seam = row.querySelector(':scope > [data-tpp-ui="last-read"]');
-    const native = wanted ? nativeLastRead(row) : null;
-    // Teams' own line, when it is really painted on the page, is the one to
-    // show: a copy would double it. A divider the fold covers has no boxes at
-    // all, so it is not on screen and the copy is drawn instead. Deciding this by
-    // drawing rather than by where the element sits is what keeps a hidden
-    // divider from leaving the condensed view with no line at all.
-    const shownByTeams = Boolean(native) && hasBox(native);
-    // No card, no line: a row the fold could not draw is not a post to mark, and
-    // the band would show up as a gap on its own.
-    const carded = Boolean(row.querySelector(':scope > [data-tpp-ui="preview"]'));
-
-    if (!wanted || shownByTeams || !carded) {
-      seam?.remove();
-      row.classList.remove('tpp-last-read-row');
-      return;
-    }
-    // The row gives the line a small band of its own, so it is not crammed into
-    // the gap Teams leaves between posts.
-    row.classList.add('tpp-last-read-row');
-    if (seam) return;
-
-    seam = document.createElement('div');
-    seam.className = 'tpp-last-read';
-    seam.dataset.tppUi = 'last-read';
-    seam.setAttribute('aria-hidden', 'true');
-    // In pixels from the start: placeLastRead reads this back to correct itself.
-    seam.style.top = '0px';
-
-    if (native) {
-      const copy = native.cloneNode(true);
-      copy.removeAttribute('id');
-      copy.removeAttribute('role');
-      copy.removeAttribute('aria-labelledby');
-      copy.removeAttribute('data-tid');
-      copy.classList.remove('tpp-detail');
-      copy.classList.add('tpp-last-read-native');
-      for (const el of copy.querySelectorAll('[id]')) el.removeAttribute('id');
-      // Nothing in the copy may look like Teams' divider again, or the next scan
-      // would take our own copy for the real thing and skip drawing.
-      for (const el of copy.querySelectorAll('[data-tid]')) el.removeAttribute('data-tid');
-      seam.append(copy);
-    } else {
-      // Nothing to copy (a build that draws the divider elsewhere): the same
-      // line-and-label shape, in the page's own colours.
-      seam.innerHTML =
-        '<span class="tpp-last-read-line"></span>' +
-        '<span class="tpp-last-read-label">Last read</span>' +
-        '<span class="tpp-last-read-line"></span>';
-    }
-    // After the card, not before it: the line ends the last-read post.
-    row.append(seam);
-
-    // One boundary, one line: a copy left on a recycled or duplicated row goes.
-    for (const other of (findMessageList() || document).querySelectorAll(
-      '[data-tpp-ui="last-read"]'
-    )) {
-      if (other !== seam) other.remove();
-    }
   }
 
   /**
@@ -887,7 +625,8 @@
 
   /**
    * Milliseconds Teams stamps into its own post ids (`author-1793472227903`),
-   * falling back to the timestamp element. Used only to read the sort order.
+   * falling back to the timestamp element. This is the clock the read model
+   * runs on: a post stamped after `since` is unread.
    */
   function timeOf(id, row) {
     const numeric = /^m:(\d{10,})$/.exec(id || '');
@@ -1144,9 +883,9 @@
         }
       }
 
-      // The whole model: no tag means Inbox, and archiving is the only thing
-      // that adds one.
-      setTag(row, archive[id] ? 'archive' : '');
+      // The whole model: a read post is tagged, an unread one is not.
+      const ts = timeOf(id, row);
+      setTag(row, isReadPost(id, ts) ? 'read' : '');
       if (row.dataset.tppNativePin !== (nativePinned ? '1' : '0')) {
         row.dataset.tppNativePin = nativePinned ? '1' : '0';
       }
@@ -1158,29 +897,80 @@
         id,
         text,
         author: authored,
-        archived: row.dataset.tppTag === 'archive',
-        ts: timeOf(id, row)
+        read: row.dataset.tppTag === 'read',
+        ts
       });
     }
 
     rowsById = next;
     nativePins = native;
-    syncLastReadBands();
-    placeLastRead();
     harvestPinnedPane();
     applyViewFiltering();
 
     if (pinsChanged) savePinsSoon();
   }
 
+  /** When Teams stamped a post, in ms, or 0 when it prints nothing readable. */
+  function stampOf(row) {
+    return row ? timeOf(row.dataset.tppId, row) : 0;
+  }
+
   /**
-   * Keeps the tag on every post in the page in step with the archive map — not
+   * Read or unread.
+   *
+   * The user's own decision wins when there is one. Otherwise a post is unread
+   * when Teams stamped it after the extension was installed: everything already
+   * in the channel at install is read, and anything posted since is waiting in
+   * the Inbox until the Archive button files it. Nothing is written for that
+   * second case, so a channel's whole history costs no storage — and there is no
+   * badge or divider to misread, which is what swept a channel into the Inbox
+   * before.
+   */
+  function isReadPost(id, ts) {
+    const entry = id ? readState[id] : null;
+    if (entry) return entry.r !== 0;
+    return !(since > 0 && ts > since);
+  }
+
+  /**
+   * Closes a post the current view filters out, and opens one it shows.
+   *
+   * Nothing is measured and nothing is compensated here: a filtered post takes
+   * no room, and the posts on show sit together with no holes between them. The
+   * list keeps its own height in the stylesheet (`min-height` in teams.css), so
+   * Teams still sees a real list when the view shows little — which is what
+   * stops it paging the channel's history in — while the geometry the scan has
+   * to maintain stays exactly one attribute per row.
+   */
+  function markTucked(row, id) {
+    // The post opened in its panel is not part of the list's flow: nothing there
+    // is filtered out, and collapsing it would close the panel.
+    if (row.dataset.tppModal === '1') return;
+
+    const filtered =
+      Boolean(id) &&
+      features &&
+      features.inboxZero &&
+      (view === VIEW_ARCHIVES ? !isReadPost(id, stampOf(row)) : isReadPost(id, stampOf(row)));
+
+    if (filtered) {
+      if (row.dataset.tppTucked !== '1') row.dataset.tppTucked = '1';
+    } else if (row.dataset.tppTucked !== undefined) {
+      delete row.dataset.tppTucked;
+    }
+  }
+
+  /**
+   * Keeps the tag on every post in the page in step with the read map — not
    * just this scan's rows, because Teams keeps stale nodes around while it
    * virtualises. Which of the two views a post appears in is then plain CSS on
    * that tag (teams.css), so no inline display has to be maintained here.
    */
   function applyViewFiltering() {
-    let anyArchived = false;
+    const rows = [];
+    let anyRead = false;
+    let anyShown = false;
+
     for (const row of document.querySelectorAll('.tpp-post')) {
       // A node this scan does not know as a post — a recycled wrapper, a copy
       // Teams left behind — keeps no controls: a rail of its own would float in
@@ -1192,34 +982,120 @@
         continue;
       }
 
-      const isArchived = Boolean(row.dataset.tppId && archive[row.dataset.tppId]);
-      setTag(row, isArchived ? 'archive' : '');
-      paintRow(row, row.dataset.tppNativePin === '1');
-      if (isArchived) anyArchived = true;
+      const isRead =
+        Boolean(row.dataset.tppId) && isReadPost(row.dataset.tppId, stampOf(row));
+      if (view === VIEW_ARCHIVES ? isRead : !isRead) anyShown = true;
+      if (isRead) anyRead = true;
+      rows.push({ row, isRead });
     }
-    publishArchivePresence(anyArchived);
+
+    // A view with nothing on show is not a filtered list at all: collapsing every
+    // post to nothing and leaving the list to explain itself is what made Teams
+    // re-measure an empty pane on a loop. The posts are left exactly as Teams
+    // laid them out and the list itself goes out of sight (teams.css).
+    const empty = rows.length > 0 && !anyShown;
+    publishEmptyView(empty);
+    markRoom(!empty);
+
+    for (const { row, isRead } of rows) {
+      setTag(row, isRead ? 'read' : '');
+      if (empty) untuck(row);
+      else markTucked(row, row.dataset.tppId);
+      paintRow(row, row.dataset.tppNativePin === '1');
+    }
+
+    publishArchivePresence(anyRead);
+  }
+
+  /**
+   * The box whose height Teams measures to decide it has reached the end of a
+   * channel.
+   *
+   * It is not the scrolling element. Teams scrolls `channel-pane-viewport`, but
+   * the height that decides whether more of the channel is fetched is the chain
+   * of boxes around the rows (`channel-pane-runway` and its wrappers). Padding
+   * written on the scroller gave it a scrollbar while the posts still measured
+   * one row tall — and Teams went on paging the whole history into the Inbox two
+   * seconds at a time. So the room goes on the innermost element that holds the
+   * rows and still sits inside the list.
+   */
+  function roomTarget(list) {
+    if (!list) return null;
+    const rows = list.querySelectorAll('.tpp-post');
+    if (!rows.length) return null;
+
+    // The row container is the nearest ancestor that holds more than one post:
+    // a per-row wrapper holds one, the runway holds them all. The end of that
+    // element is the end of the list, so that is where the room has to grow —
+    // padding on an ancestor sits below its end and moves nothing.
+    const first = rows[0];
+    let node = first;
+    while (node.parentElement && node.parentElement !== list) {
+      node = node.parentElement;
+      if (node.querySelectorAll('.tpp-post').length > 1) break;
+    }
+
+    // A row sitting straight in the list, or a climb that ran out of boxes: there
+    // is nothing to give the room to — and padding a post's own row would leave a
+    // blank card on screen.
+    if (node === list || node === first || node === document.body) return null;
+    return node;
+  }
+
+  /**
+   * Puts the room that stands in for the hidden posts after the rows, or takes it
+   * away again. It is one attribute on one element, so nothing is measured and
+   * nothing is recomputed as the list re-renders.
+   */
+  function markRoom(show) {
+    const target = show && features && features.inboxZero ? roomTarget(lastList) : null;
+
+    if (roomEl && roomEl !== target && roomEl.dataset.tppRoom !== undefined) {
+      delete roomEl.dataset.tppRoom;
+    }
+    roomEl = null;
+
+    if (!target) return;
+    if (target.dataset.tppRoom !== '1') target.dataset.tppRoom = '1';
+    roomEl = target;
+  }
+
+  /** Publishes that the current view has no post on show, for the stylesheet. */
+  function publishEmptyView(empty) {
+    const html = document.documentElement;
+    if (!html) return;
+    if (empty && features && channelMode && features.inboxZero) {
+      if (!html.hasAttribute(EMPTY_VIEW_ATTR)) html.setAttribute(EMPTY_VIEW_ATTR, '');
+    } else if (html.hasAttribute(EMPTY_VIEW_ATTR)) {
+      html.removeAttribute(EMPTY_VIEW_ATTR);
+    }
+  }
+
+  /** Opens a post back up, for a view that is not filtering anything. */
+  function untuck(row) {
+    if (row.dataset.tppTucked !== undefined) delete row.dataset.tppTucked;
   }
 
   /** Takes our own controls and marks off a row that is no longer a post. */
   function clearPostUi(row) {
-    row.classList.remove('tpp-post', 'tpp-unfold', 'tpp-previewed', 'tpp-last-read-row');
+    row.classList.remove('tpp-post', 'tpp-unfold', 'tpp-previewed');
     delete row.dataset.tppPainted;
     for (const el of row.querySelectorAll('[data-tpp-ui]')) el.remove();
   }
 
   /**
-   * Publishes whether this channel has an archived post at all, for the
-   * stylesheet. The Archives view only takes the untagged posts out of the
-   * layout once there is an archived post to show (teams.css). Emptying a
+   * Publishes whether this channel has a read post at all, for the stylesheet.
+   * The Archives view only takes the unread posts out of the layout once there
+   * is a read post to show (teams.css). Emptying a
    * virtualised message list leaves it with no height, so it decides it has
    * been scrolled to the end and fetches the rest of the channel's history in
    * batch after batch — which is what made a long channel page through every
    * old post, and the tab counts climb and fall while it did.
    */
-  function publishArchivePresence(anyArchived) {
+  function publishArchivePresence(anyRead) {
     const html = document.documentElement;
     if (!html) return;
-    if (features && channelMode && features.inboxZero && anyArchived) {
+    if (features && channelMode && features.inboxZero && anyRead) {
       if (!html.hasAttribute(HAS_ARCHIVES_ATTR)) html.setAttribute(HAS_ARCHIVES_ATTR, '');
     } else if (html.hasAttribute(HAS_ARCHIVES_ATTR)) {
       html.removeAttribute(HAS_ARCHIVES_ATTR);
@@ -1247,7 +1123,7 @@
    * flash; which view shows it is decided by the tag in CSS alone.
    */
   function paintRow(row, nativePinned) {
-    const tag = row.dataset.tppTag === 'archive' ? 'archive' : '';
+    const tag = row.dataset.tppTag === 'read' ? 'read' : '';
 
     // The body is marked so the compact view can clamp it, and a post the user
     // has opened stays open across Teams re-renders.
@@ -1274,16 +1150,24 @@
       !row.querySelector('.tpp-post-actions');
     if (row.dataset.tppPainted !== painted || railGone) {
       row.dataset.tppPainted = painted;
-      injectActions(row, tag === 'archive', nativePinned);
+      injectActions(row, tag === 'read', nativePinned);
     }
 
   }
 
-  /** Repaint one post the moment it is archived or unarchived. */
-  function paintArchived(id, isArchived) {
+  /**
+   * Repaint one post the moment it is marked read or unread.
+   *
+   * The collapse is decided here as well as in the scan, because this is the
+   * only moment the change is certainly known: a scan can be skipped while Teams
+   * re-renders the list, and then a filed post would sit there as a hole with its
+   * buttons still showing until something else happened to scan again.
+   */
+  function paintRead(id, isRead) {
     for (const row of document.querySelectorAll('.tpp-post')) {
       if (row.dataset.tppId !== id) continue;
-      setTag(row, isArchived ? 'archive' : '');
+      setTag(row, isRead ? 'read' : '');
+      markTucked(row, row.dataset.tppId);
       paintRow(row, row.dataset.tppNativePin === '1');
     }
   }
@@ -1417,14 +1301,19 @@
         // Act on what the button shows, not on a lookup that a re-render may
         // have moved on from: a button saying Unarchive always unarchives.
         const target = event.currentTarget;
-        setArchived(
+        setRead(
           postIdOf(target) || row.dataset.tppId,
-          target.dataset.tppArchived !== '1'
+          target.dataset.tppRead !== '1'
         );
       });
       actions.append(archiveBtn);
     }
-    archiveBtn.hidden = !features.inboxZero;
+    const pinnedNow = Boolean(pins[row.dataset.tppId]) || Boolean(nativePinned);
+    // A pinned post carries its pin and not its archive: the bar points at the
+    // post, so filing it away is not on offer until it is unpinned, and the
+    // rail then reads as the one button there is.
+    archiveBtn.hidden = !features.inboxZero || (pinnedNow && !isArchived);
+    archiveBtn.disabled = false;
     // An archived post reads as archived the same way a pinned one reads as
     // pinned: a white box in a filled purple circle, which is also the control
     // that puts the post back.
@@ -1436,18 +1325,10 @@
     const archiveLabel = archiveBtn.querySelector('.tpp-post-btn-label');
     const archiveText = isArchived ? 'Unarchive' : 'Archive';
     if (archiveLabel.textContent !== archiveText) archiveLabel.textContent = archiveText;
-    archiveBtn.dataset.tppArchived = isArchived ? '1' : '0';
-    // A pinned post is the bar's target, so it is never archived from under the
-    // bar: unpinning comes first, and the button says so rather than failing.
-    const cannotArchive =
-      Boolean(features.pinnedMessages) &&
-      (Boolean(pins[row.dataset.tppId]) || Boolean(nativePinned));
-    archiveBtn.disabled = cannotArchive && !isArchived;
-    archiveBtn.title = cannotArchive && !isArchived
-      ? 'Unpin this post first — a pinned post cannot be archived'
-      : isArchived
-        ? 'Unarchive this post and put it back in your Inbox'
-        : 'Archive this post — it moves to your Archive';
+    archiveBtn.dataset.tppRead = isArchived ? '1' : '0';
+    archiveBtn.title = isArchived
+      ? 'Unarchive this post and put it back in your Inbox'
+      : 'Archive this post — it moves to your Archive';
     archiveBtn.setAttribute('aria-label', archiveBtn.title);
     archiveBtn.classList.toggle('is-on', isArchived);
 
@@ -1471,7 +1352,6 @@
     pinBtn.hidden = !features.pinnedMessages || isArchived;
 
     const locallyPinned = Boolean(pins[row.dataset.tppId]);
-    const pinnedNow = locallyPinned || nativePinned;
     // Pinned reads as a filled pin, unpinned as its outline.
     setButtonIcon(
       pinBtn,
@@ -1499,12 +1379,19 @@
     return Boolean(row && row.dataset.tppNativePin === '1');
   }
 
-  function setArchived(id, wantArchived) {
+  /**
+   * Marks one post read (archived) or unread (back in the Inbox).
+   *
+   * This is the only thing that changes a post's state after its first scan.
+   * Teams' own read receipt is not consulted, because it clears by itself a few
+   * seconds after the channel opens.
+   */
+  function setRead(id, wantRead) {
     if (!id) return;
 
     // A pinned post is the target of its bar, so it is never archived from
     // under the bar: unpinning comes first.
-    if (wantArchived && isPinnedPost(id)) {
+    if (wantRead && isPinnedPost(id)) {
       toast('Unpin this post first — a pinned post cannot be archived.', anchorFor(id));
       return;
     }
@@ -1512,34 +1399,48 @@
     // hold of where it was: the news belongs on the post itself.
     const where = anchorFor(id);
 
-    if (wantArchived) {
+    if (wantRead) {
       // The tag is what hides a post, so it is written once the post has left:
       // one that disappears in the same frame reads as a glitch, not an archive.
       const row = findRow(id);
-      animateArchiveOut(row ? [row] : [], () => {
-        archive[id] = { t: Date.now() };
-        saveArchiveSoon();
-        paintArchived(id, true);
+      animateOut(row ? [row] : [], 'right', () => {
+        remember(id, true);
+        saveReadSoon();
+        paintRead(id, true);
         scan();
-        toast('Archived — hidden from your Inbox.', where);
+        toast('Marked read — filed in your Archive.', where);
       });
       return;
     }
 
-    delete archive[id];
-    saveArchiveSoon();
-    // Answer the click at once: Teams can re-render the row before the next
-    // scan, and a button that appears to do nothing is worse than a stale row.
-    paintArchived(id, false);
-    scan();
-    toast('Unarchived — back in your Inbox.', where);
+    // The other way round: the unread post is the one leaving this view, so it
+    // slides left and fades, and the list closes up behind it.
+    const row = findRow(id);
+    animateOut(row ? [row] : [], 'left', () => {
+      remember(id, false);
+      saveReadSoon();
+      paintRead(id, false);
+      scan();
+      toast('Marked unread — back in your Inbox.', where);
+    });
   }
 
   /**
-   * A post leaving the list is not made to vanish: it slides to the right and
-   * fades, so the eye sees it go. `done` runs when the last one has left.
+   * Writes one post's decision, newest last so trimming keeps the recent ones.
+   * `c` marks a decision the user made by hand, which is what the repair in
+   * bootstrap keeps: an entry without it was inferred by an older build.
    */
-  function animateArchiveOut(rows, done) {
+  function remember(id, isRead) {
+    delete readState[id];
+    readState[id] = { t: Date.now(), r: isRead ? 1 : 0, c: 1 };
+  }
+
+  /**
+   * A post leaving the list is not made to vanish: it slides and fades, so the
+   * eye sees it go. Filing slides it right; unarchiving slides it left, the same
+   * movement in reverse. `done` runs when the last one has left.
+   */
+  function animateOut(rows, direction, done) {
     const live = Array.from(rows).filter(
       (row) => row && row.isConnected && row.getClientRects().length
     );
@@ -1548,18 +1449,20 @@
       return;
     }
 
+    const cls = direction === 'left' ? 'tpp-unarchiving' : 'tpp-archiving';
+
     live.forEach((row, index) => {
-      row.classList.remove('tpp-archiving');
+      row.classList.remove('tpp-archiving', 'tpp-unarchiving');
       row.style.setProperty('--tpp-archive-delay', `${Math.min(index, 6) * 30}ms`);
       // Restart the animation on a row that is already running one.
       void row.offsetWidth;
-      row.classList.add('tpp-archiving');
+      row.classList.add(cls);
     });
 
     const total = ARCHIVE_ANIM_MS + Math.min(live.length - 1, 6) * 30;
     setTimeout(() => {
       for (const row of live) {
-        row.classList.remove('tpp-archiving');
+        row.classList.remove('tpp-archiving', 'tpp-unarchiving');
         row.style.removeProperty('--tpp-archive-delay');
       }
       done();
@@ -1595,108 +1498,7 @@
     toast(message, where);
   }
 
-  /**
-   * Archive every post older than the seam the user is hovering.
-   *
-   * Which side of the line is older is decided by the two posts either side of
-   * it — the date and time each one shows, not where they sit on screen — so it
-   * is right whether the channel lists newest first, oldest first, or after the
-   * user flips that setting in Teams. Everything on the older side is archived.
-   */
-  function archiveOlderPosts(aboveId, belowId) {
-    const rows = rowsInPaintOrder();
-    if (!rows.length) return;
-
-    // The seam's own two posts, looked up by id: the post above the line and the
-    // post below it. Positions are never assumed, since the map is not the list.
-    const belowIndex = rows.findIndex((record) => record.id === belowId);
-    if (belowIndex < 0) return;
-    const aboveIndex = rows.findIndex((record) => record.id === aboveId);
-    const above = aboveIndex >= 0 ? rows[aboveIndex] : null;
-    const below = rows[belowIndex];
-
-    // The two dates the button is asked to compare: the time printed on each
-    // post's card, and the stamp behind it. Newest-first lists show the newer
-    // post above the line, so there the older side is below it.
-    const aboveTs = above ? previewTimeOf(above.row) || above.ts : 0;
-    const belowTs = previewTimeOf(below.row) || below.ts;
-
-    let olderIsBelow;
-    if (aboveTs > 0 && belowTs > 0 && aboveTs !== belowTs) {
-      olderIsBelow = belowTs < aboveTs;
-    } else {
-      // The pair itself is undated (the same minute, or a build without ids):
-      // the first and last dated post on screen still say which way the list
-      // runs. Only when nothing at all is dated does it come down to a guess,
-      // and Teams' channel posts run newest first, top to bottom.
-      const dated = rows
-        .map((record) => previewTimeOf(record.row) || record.ts || 0)
-        .filter((ts) => ts > 0);
-      olderIsBelow = dated.length > 1 ? dated[dated.length - 1] < dated[0] : true;
-    }
-
-    // Everything from the line to the end of the older side.
-    let targets = olderIsBelow ? rows.slice(belowIndex) : rows.slice(0, belowIndex);
-
-    // And a check on the dates themselves: a post known to be newer than both
-    // posts at the seam is never archived. If that empties the side, the side
-    // itself was the wrong one, so the other side is taken instead.
-    if (aboveTs > 0 && belowTs > 0) {
-      const cut = Math.min(aboveTs, belowTs);
-      const onlyOlder = (list) =>
-        list.filter((record) => {
-          const ts = previewTimeOf(record.row) || record.ts;
-          return !ts || ts <= cut;
-        });
-      const kept = onlyOlder(targets);
-      targets = kept.length
-        ? kept
-        : onlyOlder(olderIsBelow ? rows.slice(0, belowIndex) : rows.slice(belowIndex));
-    }
-
-    const now = Date.now();
-    const leaving = [];
-    let keptPinned = 0;
-    for (const record of targets) {
-      if (archive[record.id]) continue;
-      // A bulk action leaves pinned posts alone too: a pin is taken down by
-      // hand, one at a time, so nobody loses one to a hover control.
-      if (isPinnedPost(record.id)) {
-        keptPinned += 1;
-        continue;
-      }
-      leaving.push(record);
-    }
-
-    const added = leaving.length;
-    gapZone = null;
-    hideGap();
-
-    if (!added) {
-      toast('Everything on that side is already archived.');
-      return;
-    }
-
-    savePinsSoon();
-    // Nothing is tagged until the last post has slid away: the tag is what
-    // hides a post, and hiding them first would leave only the animation of a
-    // list that had already collapsed.
-    animateArchiveOut(
-      leaving.map((record) => record.row),
-      () => {
-        for (const record of leaving) archive[record.id] = { t: now };
-        saveArchiveSoon();
-        scan();
-        // Not one post's doing, so this message sits in the middle of the list.
-        toast(
-          `Archived ${added} older post${added === 1 ? '' : 's'}.` +
-            (keptPinned ? ' Pinned posts were left alone.' : '')
-        );
-      }
-    );
-  }
-
-  // ------------------------------------------------------------ pinned bars
+  // ------------------------------------------------------------ pinned bars  // ------------------------------------------------------------ pinned bars
 
   /** Teams' own unpin control inside `root`, when it renders one there. */
   function unpinAffordance(root) {
@@ -2124,7 +1926,7 @@
    */
   function revealPost(row) {
     const id = row.dataset.tppId;
-    if (id && archive[id] && view !== VIEW_ARCHIVES) setView(VIEW_ARCHIVES);
+    if (id && isReadPost(id) && view !== VIEW_ARCHIVES) setView(VIEW_ARCHIVES);
 
     scrollPostToCentre(row, () => {
       flashPost((id && findRow(id)) || row);
@@ -2358,62 +2160,6 @@
     delete target.dataset.tppPadBase;
   }
 
-  /**
-   * Keeps a filtered list from looking like it has run out of posts.
-   *
-   * A virtualised list measures itself to decide whether to fetch more, so a
-   * channel whose Inbox posts are hidden can look scrolled to the very end and
-   * make Teams pull in its older history, batch after batch. A margin under the
-   * last post on show keeps at least a screen of scrolling below it — the list
-   * itself never changes height, so nothing on screen moves.
-   */
-  function holdListDepth(list) {
-    if (!list) {
-      releaseListDepth();
-      return;
-    }
-
-    const rows = list.querySelectorAll('.tpp-post');
-    let tail = null;
-    for (let i = rows.length - 1; i >= 0; i -= 1) {
-      // The post opened in its panel is on screen but is not the stream's end.
-      if (rows[i].offsetHeight > 0 && rows[i].dataset.tppModal !== '1') {
-        tail = rows[i];
-        break;
-      }
-    }
-
-    if (tail !== depthTail) {
-      releaseListDepth();
-      depthTail = tail;
-      if (tail) tail.dataset.tppMarginInline = tail.style.marginBottom || '';
-    }
-    if (!tail) return;
-
-    const filler = parseFloat(tail.style.marginBottom) || 0;
-
-    // Nothing left to scroll: put a screen of space below the last post, and
-    // settle on exactly what is needed on the next scan.
-    if (list.scrollHeight - list.clientHeight < 80) {
-      const push = list.clientHeight + 80;
-      if (Math.abs(filler - push) > 1) tail.style.marginBottom = `${push}px`;
-      return;
-    }
-
-    // Deep enough again: give back whatever the filler did not need to keep.
-    if (filler > 0) {
-      const content = list.scrollHeight - filler;
-      const need = Math.max(0, Math.ceil(list.clientHeight + 80 - content));
-      if (Math.abs(filler - need) > 1) tail.style.marginBottom = `${need}px`;
-    }
-  }
-
-  function releaseListDepth() {
-    if (!depthTail) return;
-    depthTail.style.marginBottom = depthTail.dataset.tppMarginInline || '';
-    delete depthTail.dataset.tppMarginInline;
-    depthTail = null;
-  }
 
   function unpinNative(id) {
     const row = findRow(id);
@@ -2486,8 +2232,6 @@
       view = next;
       writeSync({ [VIEW_KEY]: view });
     }
-    gapZone = null;
-    hideGap();
     apply();
   }
 
@@ -2865,21 +2609,9 @@
     empty.dataset.tppKind = kind;
 
     if (kind === 'zero') {
-      const confetti = document.createElement('div');
-      confetti.className = 'tpp-confetti';
-      confetti.setAttribute('aria-hidden', 'true');
-      for (let i = 0; i < 42; i += 1) {
-        const piece = document.createElement('i');
-        piece.style.left = `${Math.random() * 100}%`;
-        piece.style.background = CONFETTI_COLORS[i % CONFETTI_COLORS.length];
-        piece.style.animationDelay = `${(Math.random() * 4).toFixed(2)}s`;
-        piece.style.animationDuration = `${(3.5 + Math.random() * 3).toFixed(2)}s`;
-        piece.style.width = `${6 + Math.random() * 6}px`;
-        piece.style.height = `${10 + Math.random() * 8}px`;
-        piece.style.transform = `rotate(${Math.random() * 360}deg)`;
-        confetti.append(piece);
-      }
-
+      // A calm card rather than a celebration: with read state as the model, an
+      // empty Inbox is the everyday case, not an achievement to fire confetti
+      // over every time a channel is opened.
       const check = document.createElement('div');
       check.className = 'tpp-empty-check';
       check.innerHTML = CHECK_SVG;
@@ -2891,9 +2623,9 @@
       const copy = document.createElement('p');
       copy.className = 'tpp-empty-copy';
       copy.textContent =
-        'Every post in this channel is archived. Open the Archive tab to put one back.';
+        'Every post here is read. Open the Archive tab to find them, and Unarchive to bring one back.';
 
-      empty.append(confetti, check, title, copy);
+      empty.append(check, title, copy);
       return empty;
     }
 
@@ -2923,12 +2655,12 @@
     }
 
     const records = Array.from(rowsById.values());
-    const archived = records.filter((record) => record.archived).length;
+    const read = records.filter((record) => record.read).length;
 
     let kind = null;
     if (view === VIEW_ARCHIVES) {
-      kind = records.length > 0 && archived === 0 ? 'no-archives' : null;
-    } else if (records.length > 0 && archived === records.length) {
+      kind = records.length > 0 && read === 0 ? 'no-archives' : null;
+    } else if (records.length > 0 && read === records.length) {
       kind = 'zero';
     }
 
@@ -2949,183 +2681,7 @@
 
   // ------------------------------------------------------- hover between posts
 
-  /**
-   * Posts as they are drawn, top to bottom. The map's own order comes from the
-   * DOM, which is not the same thing: a list drawn bottom-up (column-reverse)
-   * lists the newest post last while showing it at the top, and reading the
-   * order off the map is what once pointed the seam at the wrong pair.
-   */
-  function rowsInPaintOrder() {
-    return Array.from(rowsById.values())
-      .filter((record) => record.row.isConnected && record.row.getClientRects().length)
-      .sort((a, b) => a.row.getBoundingClientRect().top - b.row.getBoundingClientRect().top);
-  }
-
-  /** Recompute the seams between two visible posts, top to bottom. */
-  function refreshGapZones() {
-    const zones = [];
-    if (features && features.inboxZero && view === VIEW_INBOX) {
-      let previous = null;
-      for (const record of rowsInPaintOrder()) {
-        const row = record.row;
-        // The post opened in its panel is over the page, not in the stream.
-        if (row.dataset.tppModal === '1') continue;
-
-        // The box the user actually sees. A folded post is its card, and the
-        // row around the card carries padding that would pull the seam down,
-        // which is what made the line sit nearer the post below.
-        const box = row.querySelector(':scope > [data-tpp-ui="preview"]') || row;
-        const rect = box.getBoundingClientRect();
-        const column = row.getBoundingClientRect();
-        if (!rect.height) continue;
-
-        if (previous) {
-          zones.push({
-            // Halfway between the bottom of one post's box and the top of the
-            // next, so the line is centred in the gap between them.
-            y: (previous.rect.bottom + rect.top) / 2,
-            // The seam's two posts by id: which of them is above the line is a
-            // fact of the drawing, not of the map.
-            aboveId: previous.record.id,
-            belowId: record.id,
-            left: Math.max(column.left, 0),
-            width: Math.max(column.width, 240)
-          });
-        }
-        previous = { rect, record };
-      }
-    }
-    gapZones = zones;
-  }
-
-  function ensureGapEl() {
-    if (gapZone) return gapZone;
-
-    const el = document.createElement('div');
-    el.id = GAP_ID;
-    el.className = 'tpp-gap';
-    el.dataset.tppUi = 'gap';
-
-    const line = document.createElement('span');
-    line.className = 'tpp-gap-line';
-    line.setAttribute('aria-hidden', 'true');
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'tpp-gap-btn';
-    button.textContent = 'Archive all older posts';
-    button.title = 'Archive every post on the older side of this line';
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      // The pointer is still on the spot the line was: without this the next
-      // mousemove would put the control straight back after the click.
-      gapMuteUntil = Date.now() + 700;
-      hideGap();
-      archiveOlderPosts(el.dataset.above || '', el.dataset.below || '');
-    });
-
-    el.append(line, button);
-    document.body.append(el);
-    gapZone = el;
-    return el;
-  }
-
-  function showGap(zone) {
-    if (!listRect) return;
-    const el = ensureGapEl();
-    el.dataset.above = zone.aboveId;
-    el.dataset.below = zone.belowId;
-    el.style.top = `${zone.y}px`;
-    // No wider than the post it sits between: the line belongs to the stream,
-    // not to the whole pane.
-    const width = Math.max(Math.min(zone.width, window.innerWidth - zone.left), 240);
-    el.style.left = `${zone.left}px`;
-    el.style.width = `${width}px`;
-    el.classList.add('is-on');
-  }
-
-  function hideGap() {
-    document.getElementById(GAP_ID)?.classList.remove('is-on');
-  }
-
-  /** The pointer's last known position, so the control can be re-checked later. */
-  let pointerX = 0;
-  let pointerY = 0;
-  let pointerSeen = false;
-  /** A short quiet spell after a click, so the control cannot blink back. */
-  let gapMuteUntil = 0;
-
-  /**
-   * Decides, for one point, whether a seam is close enough to offer the control.
-   *
-   * Every case ends in a definite answer, shown or hidden, so calling it again
-   * without the pointer moving is safe: it is how the control is cleared when
-   * the seams move under a resting cursor, the list re-renders, or the view is
-   * switched by something other than a mousemove.
-   */
-  function evaluateGap(x, y) {
-    if (
-      !ready ||
-      !channelMode ||
-      !features ||
-      !features.inboxZero ||
-      view !== VIEW_INBOX ||
-      !listRect ||
-      Date.now() < gapMuteUntil
-    ) {
-      hideGap();
-      return;
-    }
-
-    if (x < listRect.left - 4 || x > listRect.right + 4) {
-      hideGap();
-      return;
-    }
-
-    let best = null;
-    for (const zone of gapZones) {
-      const distance = Math.abs(y - zone.y);
-      if (distance > GAP_TOLERANCE) continue;
-      if (!best || distance < best.distance) best = { zone, distance };
-    }
-
-    if (!best) {
-      hideGap();
-      return;
-    }
-    showGap(best.zone);
-  }
-
-  /** Re-checks the point the pointer is resting on, without a new event. */
-  function recheckGap() {
-    if (!pointerSeen) return;
-    evaluateGap(pointerX, pointerY);
-  }
-
-  function updateGapHover(event) {
-    pointerX = event.clientX;
-    pointerY = event.clientY;
-    pointerSeen = true;
-
-    // Keep the control while the pointer travels onto its own button.
-    if (
-      gapZone &&
-      gapZone.classList.contains('is-on') &&
-      gapZone.contains(event.target)
-    ) {
-      return;
-    }
-
-    evaluateGap(pointerX, pointerY);
-  }
-
-  function onPointerMove(event) {
-    if (!ready) return;
-    updateGapHover(event);
-  }
-
-  // -------------------------------------------------------------- overlays
+  // -------------------------------------------------------------- overlays  // -------------------------------------------------------------- overlays
 
   /**
    * Keep a fixed-position overlay glued to the message list. `full` stretches
@@ -3250,9 +2806,9 @@
       const message = document.getElementById(TOAST_ID);
       if (message) placeToast(message);
 
-      refreshGapZones();
-      placeLastRead();
-      hideGap();
+      // Scrolling is the moment the list is asked for more, so the limit is
+      // re-checked here as well as after a scan.
+      clampScroll(list);
     });
   }
 
@@ -3261,13 +2817,67 @@
   /**
    * The channel a pin belongs to.
    *
-   * Teams names the channel in its own path — /l/channel/<id>/<name>, or
-   * /l/chat/<id> for a chat — so the path is the namespace: a pin made in one
-   * channel stays out of the next, and a chat's pins stay out of both.
+   * Teams names the channel in its route — /l/channel/<id>/<name> — but the
+   * newest Teams keeps that route in the hash, so the pathname alone is the
+   * same string in every channel. A key built from it is therefore one bucket
+   * shared by all of them, which is how a pin made in one channel showed up in
+   * the next. The whole URL is asked for the channel instead, and the id it
+   * names is the key.
    */
   function channelKey() {
-    const path = String(location.pathname || '').replace(/\/+$/, '');
-    return path ? path.slice(0, 220) : 'teams';
+    const href = String(location.href || '');
+    const route = href.match(/\/channel\/([^/?#]+)/i);
+    if (route) return CHANNEL_PREFIX + channelIdOf(route[1]);
+
+    // A build whose route does not name the channel: the rest of the route is
+    // still the best identity there is, so two channels only share a bucket
+    // when their routes are the same.
+    const rest = `${location.pathname || ''}${location.hash || ''}`
+      .replace(/[?#].*$/, '')
+      .replace(/\/+$/, '');
+    return rest ? `route:${rest.slice(0, 200)}` : 'route:teams';
+  }
+
+  /** A channel id as Teams writes it, decoded and lower-cased to stay stable. */
+  function channelIdOf(segment) {
+    let id = String(segment || '');
+    try {
+      id = decodeURIComponent(id);
+    } catch (_) {
+      // A percent-mangled id: the raw segment is still a fine key.
+    }
+    return id.toLowerCase().slice(0, 200);
+  }
+
+  /**
+   * Pins filed by the build that keyed channels by pathname.
+   *
+   * On new Teams that key is the same in every channel, so those buckets are
+   * one bucket shared by all of them: there is no way to tell which channel
+   * each pin came from. They are adopted, once, by the channel on screen and
+   * rewritten under its own key, so the pins the user already made are kept and
+   * no bucket every channel reads is left behind. A path bucket that names a
+   * different channel is another channel's and is left where it is.
+   */
+  function adoptPathPins() {
+    const own = channelKey();
+    const id = own.startsWith(CHANNEL_PREFIX) ? own.slice(CHANNEL_PREFIX.length) : '';
+    const stale = Object.keys(pinsAll).filter((key) => !key.startsWith(CHANNEL_PREFIX));
+    if (!stale.length) return;
+
+    let changed = false;
+    for (const key of stale) {
+      const named = key.match(/\/channel\/([^/]+)/i);
+      if (named && id && !channelIdOf(named[1]).includes(id)) continue;
+
+      Object.assign(pinsFor(own), pinsAll[key]);
+      delete pinsAll[key];
+      changed = true;
+    }
+
+    if (!changed) return;
+    pins = pinsFor(own);
+    savePinsSoon();
   }
 
   /** The current channel's bucket, created on first use. */
@@ -3307,11 +2917,11 @@
 
   // -------------------------------------------------------------- persistence
 
-  function saveArchiveSoon() {
-    clearTimeout(archiveSaveTimer);
-    archiveSaveTimer = setTimeout(() => {
-      archiveSaveTimer = 0;
-      persistArchive();
+  function saveReadSoon() {
+    clearTimeout(readSaveTimer);
+    readSaveTimer = setTimeout(() => {
+      readSaveTimer = 0;
+      persistRead();
     }, 200);
   }
 
@@ -3323,19 +2933,19 @@
     }, 200);
   }
 
-  async function persistArchive() {
-    let trimmed = Object.fromEntries(Object.entries(archive).slice(-ARCHIVE_LIMIT));
-    archive = trimmed;
+  async function persistRead() {
+    let trimmed = Object.fromEntries(Object.entries(readState).slice(-READ_LIMIT));
+    readState = trimmed;
 
-    if (await writeSync({ [ARCHIVE_KEY]: trimmed })) return;
+    if (await writeSync({ [UNREAD_KEY]: trimmed })) return;
 
     // Per-item quota: keep only the newest quarter and try once more rather
     // than silently losing the change.
     trimmed = Object.fromEntries(
-      Object.entries(trimmed).slice(-Math.max(10, Math.floor(ARCHIVE_LIMIT / 4)))
+      Object.entries(trimmed).slice(-Math.max(10, Math.floor(READ_LIMIT / 4)))
     );
-    archive = trimmed;
-    await writeSync({ [ARCHIVE_KEY]: trimmed });
+    readState = trimmed;
+    await writeSync({ [UNREAD_KEY]: trimmed });
   }
 
   /**
@@ -3393,6 +3003,78 @@
     }
   }
 
+  /**
+   * The element that actually scrolls the post list. findMessageList can name a
+   * runway nested inside the scroller, so the box carrying the scrollbar is
+   * looked up from the list and then from its ancestors.
+   */
+  function scrollBoxFor(list) {
+    if (!list) return null;
+    const scrolls = (el) =>
+      el.scrollHeight > el.clientHeight + 1 &&
+      /(auto|scroll|overlay)/.test(getComputedStyle(el).overflowY);
+
+    if (scrolls(list)) return list;
+    for (let node = list.parentElement; node && node !== document.body; node = node.parentElement) {
+      if (scrolls(node)) return node;
+    }
+    return list;
+  }
+
+  /** Whether the current view is showing this post at all (teams.css decides). */
+  function onShow(row) {
+    if (!row || row.dataset.tppTucked !== undefined) return false;
+    if (row.dataset.tppModal === '1') return false;
+    if (!features || !features.inboxZero) return true;
+    const read = row.dataset.tppTag === 'read';
+    return view === VIEW_ARCHIVES ? read : !read;
+  }
+
+  /**
+   * The list ends where its last post on show ends.
+   *
+   * Hidden posts keep the height Teams measured — that is exactly what stops it
+   * paging the channel's history into a filtered view — so the list is much
+   * taller than what is on show, and a wheel would carry the user into blank
+   * space, asking Teams for older history that arrives and is hidden again. The
+   * scroll is held to the last post instead, which also leaves a short Inbox
+   * that does not scroll at all.
+   *
+   * A pin search is exempt: it walks the list through its history on purpose.
+   */
+  function clampScroll(list) {
+    if (!ready || !features || !features.inboxZero || pinJump || !list) return;
+    const box = scrollBoxFor(list);
+    if (!box) return;
+
+    const boxRect = box.getBoundingClientRect();
+    const top = box.scrollTop;
+    let last = 0;
+    let found = false;
+    for (const row of box.querySelectorAll('.tpp-post')) {
+      if (!onShow(row)) continue;
+      const rect = row.getBoundingClientRect();
+      if (!rect.height) continue;
+      found = true;
+      last = Math.max(last, rect.bottom - boxRect.top + top);
+    }
+    // Nothing on show: an Inbox with everything read, or an Archive with
+    // nothing in it yet. The posts are all closed up, so there is nowhere to
+    // read to — the scroll is held at the start rather than left free to walk
+    // down the room kept at the end of the list, which is what asks Teams for
+    // more of the channel. A list that has not been tagged yet is left alone.
+    if (!found) {
+      const filtered = Array.from(box.querySelectorAll('.tpp-post')).some(
+        (row) => row.dataset.tppTucked !== undefined
+      );
+      if (filtered && box.scrollTop > 1) box.scrollTop = 0;
+      return;
+    }
+
+    const limit = Math.max(0, last - box.clientHeight);
+    if (box.scrollTop > limit + 1) box.scrollTop = limit;
+  }
+
   // ------------------------------------------------------------------- scan
 
   function scan() {
@@ -3437,14 +3119,12 @@
     if (observer) observer.disconnect();
     try {
       if (!list) {
-        for (const id of [STACK_ID, EMPTY_ID, GAP_ID]) {
+        for (const id of [STACK_ID, EMPTY_ID]) {
           document.getElementById(id)?.remove();
         }
         // The tabs live in the channel's own tab strip, so they survive a scan
         // that finds no list; renderTabs drops them once that strip is gone.
         renderTabs(null);
-        gapZone = null;
-        gapZones = [];
         document.documentElement.removeAttribute(HAS_ARCHIVES_ATTR);
         clearTopInset();
         clearLeftInset();
@@ -3473,23 +3153,80 @@
       if (features.inboxZero || features.pinnedMessages) applyLeftInset(list);
       else clearLeftInset(list);
 
-      // Filtered posts out of the list can look like the end of its history;
-      // the same filler keeps that from pulling in the whole channel.
-      if (features.inboxZero && view === VIEW_ARCHIVES) {
-        holdListDepth(list);
-      } else {
-        releaseListDepth();
-      }
+      // The posts have just been re-measured: the Inbox may now end higher up.
+      clampScroll(list);
 
-      refreshGapZones();
       // The seams have just moved or gone: re-check where the pointer is, so the
       // control cannot outlive the gap it was describing.
-      recheckGap();
     } finally {
       if (observer) {
         observer.observe(document.documentElement, { childList: true, subtree: true });
       }
     }
+  }
+
+  /**
+   * Closes up the posts Teams has just inserted, before the next paint.
+   *
+   * A MutationObserver callback runs before the browser paints, so doing the one
+   * thing that matters here — giving a read post its id and its tucked mark —
+   * means a batch of older posts never appears at full height only to collapse a
+   * moment later. That flash is what made the list jump on first load, and again
+   * whenever hovering made Teams re-render a few rows. Everything else (cards,
+   * buttons, pins) still waits for the debounced scan.
+   */
+  function absorbNodes(nodes) {
+    if (!ready || !features || !features.inboxZero || channelMode !== true) return;
+
+    for (const node of nodes) {
+      if (!node || node.nodeType !== 1) continue;
+      if (node.closest('[data-tpp-ui], .tpp-pin-stack, .tpp-tabs, .tpp-empty-state')) continue;
+
+      for (const row of newRows(node)) {
+        if (row.dataset.tppModal === '1') continue;
+        if (row.classList.contains('tpp-post') && row.dataset.tppId) continue;
+
+        const text = previewOf(row) || collapse(row.textContent || '').slice(0, 160);
+        if (!text) continue;
+
+        const id = idFor(row, text);
+        if (row.dataset.tppId !== id) {
+          row.dataset.tppId = id;
+          delete row.dataset.tppPainted;
+        }
+        row.classList.add('tpp-post');
+        setTag(row, isReadPost(id, timeOf(id, row)) ? 'read' : '');
+        markTucked(row, id);
+      }
+    }
+  }
+
+  /**
+   * The post rows inside a subtree Teams has just inserted. The node may be one
+   * post, a batch of them, or the list itself, so a node that holds only part of
+   * its parent's posts is taken as a row, and anything else is walked with the
+   * same rule the scan uses.
+   */
+  function newRows(node) {
+    const marker = S.postHeader[0];
+    if (!marker) return [];
+
+    let inside = 0;
+    try {
+      inside = node.querySelectorAll(marker).length;
+    } catch (_) {
+      return [];
+    }
+    if (!inside) return [];
+
+    if (!node.classList.contains('tpp-post')) {
+      const siblings = node.parentElement
+        ? node.parentElement.querySelectorAll(marker).length
+        : 0;
+      if (siblings > inside) return [node];
+    }
+
+    return collectRows(node, false);
   }
 
   function scheduleScan() {
@@ -3512,7 +3249,6 @@
     if (!features.inboxZero) {
       html.removeAttribute(HAS_ARCHIVES_ATTR);
       for (const el of document.querySelectorAll('.tpp-list')) el.classList.remove('tpp-list');
-      releaseListDepth();
       // Forget the cached paint so every post's buttons are rebuilt.
       for (const el of document.querySelectorAll('.tpp-post')) {
         delete el.dataset.tppPainted;
@@ -3628,17 +3364,15 @@
    * Takes down everything Teams++ drew, for a page that is not a channel.
    *
    * The flags already stop the styles; this removes what was injected into the
-   * page itself — tabs, pin bars, the empty state, the seam control, the rail and
+   * page itself — tabs, pin bars, the empty state, the rail and
    * every mark on a row — so a chat is exactly as Teams made it.
    */
   function teardownChannelUi() {
-    for (const id of [TABS_ID, STACK_ID, EMPTY_ID, GAP_ID, TOAST_ID, PIN_COPY_ID]) {
+    for (const id of [TABS_ID, STACK_ID, EMPTY_ID, TOAST_ID, PIN_COPY_ID]) {
       document.getElementById(id)?.remove();
     }
     hideSearchCancel();
 
-    gapZone = null;
-    gapZones = [];
     toastAnchor = null;
     lastList = null;
     listRect = null;
@@ -3646,7 +3380,6 @@
     releaseNativeTab();
     clearTopInset();
     clearLeftInset();
-    releaseListDepth();
 
     for (const el of document.querySelectorAll('.tpp-list')) el.classList.remove('tpp-list');
     for (const el of document.querySelectorAll('.tpp-post')) clearPostUi(el);
@@ -3655,18 +3388,49 @@
     }
 
     document.documentElement.removeAttribute(HAS_ARCHIVES_ATTR);
+    document.documentElement.removeAttribute(EMPTY_VIEW_ATTR);
+
+    if (roomEl && roomEl.dataset.tppRoom !== undefined) delete roomEl.dataset.tppRoom;
+    roomEl = null;
   }
 
   async function bootstrap() {
     const items = await readSync({
       [STORAGE_KEY]: null,
-      [ARCHIVE_KEY]: null,
+      [UNREAD_KEY]: null,
+      [LEGACY_ARCHIVE_KEY]: null,
+      [SINCE_KEY]: null,
       [PINS_KEY]: null,
       [VIEW_KEY]: null
     });
 
     features = normalize(items[STORAGE_KEY]);
-    archive = normalizeMap(items[ARCHIVE_KEY], ARCHIVE_LIMIT);
+    readState = normalizeMap(items[UNREAD_KEY], READ_LIMIT);
+
+    // Entries the old build inferred from Teams' "New" badge and "Last read"
+    // line are r: 0 with no `c`; they are the sweep, not the user's own marks.
+    let dropped = false;
+    for (const [id, entry] of Object.entries(readState)) {
+      if (entry.r === 0 && entry.c !== 1) {
+        delete readState[id];
+        dropped = true;
+      }
+    }
+    if (dropped) writeSync({ [UNREAD_KEY]: readState });
+
+    // The line the whole model is built on. Set once, at the first run: every
+    // post already in a channel is older than it, and every post since is newer.
+    since = Number(items[SINCE_KEY]) || 0;
+    if (!(since > 0)) {
+      since = Date.now();
+      writeSync({ [SINCE_KEY]: since });
+    }
+    // The build before read state kept its archive tags here. A post with no
+    // entry is read now, so that map has nothing left to say — it is dropped so
+    // it stops spending the sync quota.
+    if (items[LEGACY_ARCHIVE_KEY]) {
+      chrome.storage.sync.remove(LEGACY_ARCHIVE_KEY, () => void chrome.runtime.lastError);
+    }
 
     const storedPins = items[PINS_KEY];
     pinsAll = normalizePins(storedPins, PIN_LIMIT, PIN_CHANNEL_LIMIT);
@@ -3680,6 +3444,7 @@
     } else {
       pins = pinsFor(pinChannel);
     }
+    adoptPathPins();
     view = normalizeView(items[VIEW_KEY]);
     ready = true;
     apply();
@@ -3714,7 +3479,14 @@
       else if (scheme.addListener) scheme.addListener(onChange);
     }
 
-    observer = new MutationObserver(scheduleScan);
+    observer = new MutationObserver((records) => {
+      // Before the scan's debounce: a post Teams has just inserted is closed up
+      // now, so a fetched batch never paints at full height and then collapses.
+      for (const record of records) {
+        if (record.addedNodes.length) absorbNodes(record.addedNodes);
+      }
+      scheduleScan();
+    });
     observer.observe(document.documentElement, { childList: true, subtree: true });
 
     // Restore the feature flags if Teams rewrites <html>.
@@ -3737,16 +3509,6 @@
     window.addEventListener('scroll', reposition, { passive: true, capture: true });
     window.addEventListener('resize', reposition);
 
-    // The gap control follows the pointer, so only a mousemove can reveal it.
-    document.addEventListener('mousemove', onPointerMove, { passive: true });
-    document.addEventListener('mouseleave', hideGap);
-    // A resting cursor produces no mousemove, and neither does a keyboard or a
-    // window switch, so the control is cleared by those too.
-    window.addEventListener('blur', hideGap);
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) hideGap();
-    });
-
     bootstrap();
   }
 
@@ -3754,7 +3516,10 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'sync' || !ready) return;
     if (changes[STORAGE_KEY]) features = normalize(changes[STORAGE_KEY].newValue);
-    if (changes[ARCHIVE_KEY]) archive = normalizeMap(changes[ARCHIVE_KEY].newValue, ARCHIVE_LIMIT);
+    if (changes[UNREAD_KEY]) {
+      readState = normalizeMap(changes[UNREAD_KEY].newValue, READ_LIMIT);
+    }
+    if (changes[SINCE_KEY]) since = Number(changes[SINCE_KEY].newValue) || since;
     if (changes[PINS_KEY]) {
       pinsAll = normalizePins(changes[PINS_KEY].newValue, PIN_LIMIT, PIN_CHANNEL_LIMIT);
       pins = pinsFor(channelKey());

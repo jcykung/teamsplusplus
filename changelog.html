@@ -294,13 +294,85 @@
       <div class="subtitle">What's new and improved in Teams++</div>
 
       <ul class="timeline">
-        <!-- v0.5.1 -->
+        <!-- v0.6.2 -->
         <li class="timeline-item latest">
+          <div class="timeline-marker"></div>
+          <div class="timeline-header">
+            <h2 class="version-title">v0.6.2</h2>
+            <span class="version-date">November 2026</span>
+            <span class="badge badge-latest">Current</span>
+          </div>
+          <ul class="change-list">
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>No gaps between posts:</strong> A post the tab hides is now closed up and takes no room, so the Inbox and the Archive are each one unbroken run of posts in Teams' own order. The height it gave up is handed back as one constant block of room after the last post — and only while the tab still has a post on show. An emptied tab is left exactly as Teams laid it out, with the empty state in front of it, because collapsing the lot made Teams re-measure an empty pane on a loop.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>Posts arrive already closed:</strong> Older posts Teams fetched in the background used to paint at full height and collapse a moment later, so the list jumped for every batch — on first load, and whenever hovering made Teams render a few rows. They are now marked before the browser paints, so a batch is never seen arriving.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>The Inbox stops paging the channel's history:</strong> The room now sits on the box Teams actually measures — the row container, three windows tall — instead of the scrolling element around it, which only produced a scrollbar while the posts still read as one row. A short Inbox no longer looks like the end of the channel.
+            </li>
+          </ul>
+        </li>
+
+        <!-- v0.6.1 -->
+        <li class="timeline-item">
+          <div class="timeline-marker"></div>
+          <div class="timeline-header">
+            <h2 class="version-title">v0.6.1</h2>
+            <span class="version-date">November 2026</span>
+          </div>
+          <ul class="change-list">
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>No more gaps between posts:</strong> A post the Inbox (or the Archive) hides used to keep its height, which left blank holes between the posts on show. Hidden posts are now closed up and take no room, so each tab is one unbroken run of posts in Teams' own order, starting at the top. The list keeps one constant block of room after its last post instead of a height measured from the hidden ones, so emptying the Inbox no longer sends Teams looking for the rest of the channel's history — and a tab with nothing left to show is left exactly as Teams laid it out, with the empty state in front of it, rather than collapsed to nothing.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>The Inbox ends at its last post:</strong> Scrolling stops with the last post on screen at the bottom, and an Inbox shorter than the window does not scroll at all.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>Pins stay in their channel:</strong> Pins are filed under the channel's own id, read from the full route rather than the path. New Teams keeps the channel in the hash, so every channel shared one path — and one bucket of pins — which is why a post pinned in one channel appeared in the next.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>One button on a pinned post:</strong> A pinned post keeps its Pin button and drops the Archive button, rather than showing an archive control that only says no. Unpin it and Archive is back.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>Pins you already made:</strong> Pins filed under the old shared key are adopted once by the channel you are in, so the bars you had are still there after the update.
+            </li>
+          </ul>
+        </li>
+
+        <!-- v0.6.0 -->
+        <li class="timeline-item">
+          <div class="timeline-marker"></div>
+          <div class="timeline-header">
+            <h2 class="version-title">v0.6.0</h2>
+            <span class="version-date">November 2026</span>
+          </div>
+          <ul class="change-list">
+            <li class="change-item">
+              <span class="badge-tag tag-new">NEW</span><strong>Read and unread, not a private archive flag:</strong> The Inbox holds the posts you have not dealt with, and everything read is in the Archive. The moment you install Teams++ is stored once: anything posted after it starts in the Inbox, and everything already in the channel is read. No badge to race, no divider to misread.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>A quieter card:</strong> Teams' <strong>New</strong> badge and its <strong>Last read</strong> line are gone from the compact view. With an Inbox and an Archive, the tabs already say what is read.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-new">NEW</span><strong>One button decides:</strong> Archiving marks a post read and files it in the Archive; Unarchive marks it unread and brings it back. Nothing else moves a post, so the two tabs always agree.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>A first visit that makes sense:</strong> On install, the posts you have already read are in the Archive and the ones Teams shows as new are in the Inbox, with no tidying-up needed.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>An Inbox that leaves the list alone:</strong> Filtered-out posts are hidden in place instead of being squashed to a hairline, so the Inbox no longer makes Teams page the channel's entire history into it the moment it opens. Older posts load when you scroll, as they should.
+            </li>
+          </ul>
+        </li>
+
+        <!-- v0.5.1 -->
+        <li class="timeline-item">
           <div class="timeline-marker"></div>
           <div class="timeline-header">
             <h2 class="version-title">v0.5.1</h2>
             <span class="version-date">November 2026</span>
-            <span class="badge badge-latest">Current</span>
           </div>
           <ul class="change-list">
             <li class="change-item">
@@ -319,10 +391,7 @@
               <span class="badge-tag tag-improve">IMPROVE</span><strong>Archive is a filter:</strong> The Archive tab is the Posts list with only archived posts showing, so the violet edge and the blank ghost rows a filtered-out post left behind are gone.
             </li>
             <li class="change-item">
-              <span class="badge-tag tag-improve">IMPROVE</span><strong>Archiving you can watch:</strong> A post slides to the right and fades as it leaves the Inbox, and <em>Archive all older posts</em> sends the whole older side after it in a short ripple.
-            </li>
-            <li class="change-item">
-              <span class="badge-tag tag-fix">FIX</span><strong>Archive all older posts, in the right direction:</strong> The line between posts is no wider than a post and sits centred in the gap. The button compares the date and time printed on the posts either side of it — with the message's own stamp as a backup — so it archives towards the older post whatever order the channel lists in. It also clears itself when clicked or when the view changes, instead of hanging about.
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>Archiving you can watch:</strong> A post slides to the right and fades as it leaves the Inbox, so the eye sees where it went instead of finding it gone.
             </li>
             <li class="change-item">
               <span class="badge-tag tag-fix">FIX</span><strong>No stray buttons:</strong> An Archive/Pin pair no longer appears on its own in the middle of an empty Archive, and a filtered-out post leaves no controls behind.

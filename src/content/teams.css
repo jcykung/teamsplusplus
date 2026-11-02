@@ -64,30 +64,90 @@ html[data-tpp-theme="dark"] {
 }
 
 /*
- * A post's tag is the whole model: no tag means Inbox, "archive" means
- * Archives. Hiding is done here rather than with an inline style on the row, so
- * a Teams re-render cannot put an archived post back in the Inbox (or an
- * unarchived one in the Archives).
+ * A post's tag is the whole model: no tag means unread, "read" means filed in
+ * the Archive. Which view a post appears in is decided here rather than with an
+ * inline style on the row, so a Teams re-render cannot put a read post back in
+ * the Inbox (or an unread one in the Archive).
+ *
+ * The rows themselves are closed by markTucked (content.js) — every post the
+ * view filters out, not just the one the user moved — so what is on show is one
+ * unbroken run of posts, starting at the top of the list.
+ *
+ * The list keeps a floor height below (`.tpp-list`). Teams' list is virtualised
+ * and fetches a channel's history when its content suddenly looks empty, which
+ * emptying the Inbox does; a fixed floor keeps that arithmetic honest without
+ * anything having to be measured, so no post can be moved by a recalculation.
  */
-html[data-tpp-inbox-zero][data-tpp-view="inbox"] .tpp-post[data-tpp-tag="archive"] {
-  display: none !important;
-}
 
 /*
- * Archives shows the archived posts and hides the rest — but only once there is
- * an archived post to show. Hiding every post in a virtualised list leaves it
- * with no height at all, so it decides it has been scrolled to the end and
- * fetches the channel's whole history, one batch after another: the list is
- * seen "loading all the old posts" the moment an empty Archives is opened.
+ * Hidden means hidden, including our own rail: a post left open is marked
+ * tpp-unfold, whose rule turns the buttons back to visible, so a filtered-out
+ * post would otherwise leave a lone Archive/Pin pair floating in its space.
  */
+html[data-tpp-inbox-zero][data-tpp-view="inbox"]
+  .tpp-post[data-tpp-tag="read"]
+  [data-tpp-ui="actions"],
 html[data-tpp-inbox-zero][data-tpp-view="archives"][data-tpp-has-archives]
-  .tpp-post:not([data-tpp-tag="archive"]) {
-  display: none !important;
+  .tpp-post:not([data-tpp-tag="read"])
+  [data-tpp-ui="actions"] {
+  visibility: hidden !important;
 }
 
 /*
- * Nothing archived: the posts stay exactly as Teams laid them out, and the list
- * itself goes out of sight instead. Nothing collapses, so nothing is fetched.
+ * The collapse itself: a post the current view hides takes no room in the list,
+ * so the posts on show sit next to each other with no gaps. The height it gave
+ * up is remembered and added to the list's top padding instead.
+ */
+html[data-tpp-inbox-zero] .tpp-post[data-tpp-tucked] {
+  height: 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  visibility: hidden !important;
+}
+
+/*
+ * A filtered list can be left with almost nothing in it — every post in the
+ * Inbox read, or an Archive of one. Teams decides it has reached the end of a
+ * channel from the height of the box that holds the rows, so that box keeps a
+ * block of room after the last row: the end sits below the fold, and the content
+ * is never shorter than the pane.
+ *
+ * The room goes on that box, not on the scrolling element around it (markRoom in
+ * content.js): padding on the scroller gave it a scrollbar while the posts still
+ * measured one row tall, and Teams went on paging the channel's history into the
+ * Inbox. It goes after the rows, and it is one constant: a value measured from
+ * the hidden posts is exactly what used to make them move. clampScroll keeps the
+ * scroll short of it, so it is never seen.
+ *
+ * Three windows tall, not one: Teams decides it is near the end well before the
+ * end is on screen — a lazy loader keeps a margin of a few hundred pixels — and
+ * at one window the end still sat 395px under the fold of a 913px pane, which is
+ * close enough to keep it fetching. Nothing on screen depends on the number, so
+ * it is chosen to be safely out of reach.
+ */
+html[data-tpp-inbox-zero] [data-tpp-room] {
+  padding-bottom: 300vh !important;
+}
+
+/*
+ * A view with nothing on show at all — the Inbox emptied, an Archive with
+ * nothing filed. Nothing is collapsed there (markTucked skips a view with no
+ * posts on show): the list stays exactly as Teams laid it out and is simply
+ * taken out of sight, with the empty state speaking for it. Collapsing the lot
+ * left Teams re-measuring an empty pane, and the posts jumped about while it
+ * did.
+ */
+html[data-tpp-inbox-zero][data-tpp-empty-view] .tpp-list {
+  visibility: hidden !important;
+}
+
+/*
+ * Nothing read yet: the posts stay exactly as Teams laid them out, and the list
+ * itself goes out of sight instead. Nothing is collapsed, so nothing is fetched.
  */
 html[data-tpp-inbox-zero][data-tpp-view="archives"]:not([data-tpp-has-archives])
   .tpp-list {
@@ -108,21 +168,9 @@ html[data-tpp-inbox-zero][data-tpp-view="archives"]:not([data-tpp-has-archives])
 /*
  * The Archive tab is the Posts list filtered, not a second list, so nothing is
  * added to a post to mark it as archived: no edge, no badge, no re-dressing.
- * What has to go is the box Teams wrapped a hidden post in. A wrapper whose
- * every post is filtered out would stand there as a blank "ghost" post, so it
- * leaves with the posts it held.
+ * A filtered-out post keeps its height inside whatever box Teams wrapped it in,
+ * so those boxes need no handling of their own.
  */
-html[data-tpp-inbox-zero][data-tpp-view="inbox"]
-  .tpp-list
-  > :not(.tpp-post):has(.tpp-post[data-tpp-tag="archive"]):not(:has(.tpp-post:not([data-tpp-tag="archive"]))) {
-  display: none !important;
-}
-
-html[data-tpp-inbox-zero][data-tpp-view="archives"][data-tpp-has-archives]
-  .tpp-list
-  > :not(.tpp-post):has(.tpp-post:not([data-tpp-tag="archive"])):not(:has(.tpp-post[data-tpp-tag="archive"])) {
-  display: none !important;
-}
 
 /*
  * Teams' own shimmer stand-ins for posts it is still fetching (markLoadingRows
@@ -362,7 +410,7 @@ html[data-tpp-inbox-zero][data-tpp-view="archives"] [data-tpp-placeholder] {
   opacity: 0.85;
 }
 
-/* Inbox Zero: confetti empty state --------------------------------------- */
+/* Inbox Zero: the empty-Inbox card --------------------------------------- */
 
 .tpp-empty-state {
   z-index: 2147482998;
@@ -374,33 +422,6 @@ html[data-tpp-inbox-zero][data-tpp-view="archives"] [data-tpp-placeholder] {
   border-radius: 10px;
   text-align: center;
   pointer-events: none;
-}
-
-.tpp-confetti {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.tpp-confetti i {
-  position: absolute;
-  top: -18px;
-  display: block;
-  border-radius: 2px;
-  opacity: 0.9;
-  animation-name: tpp-fall;
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
-}
-
-@keyframes tpp-fall {
-  0% {
-    transform: translateY(-6vh) rotate(0deg);
-  }
-  100% {
-    transform: translateY(110vh) rotate(720deg);
-  }
 }
 
 .tpp-empty-check {
@@ -691,97 +712,9 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-preview:hover .tpp-
 }
 
 /*
- * Teams' unread badge, carried by the card instead of the row it hides. It is
- * set after the time so a folded post still says, at a glance, that it is new.
- */
-.tpp-preview-new {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--tpp-purple-user);
-  color: #fff;
-  font: 800 9.5px/1.5 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-preview:hover .tpp-preview-new {
-  background: #fff;
-  color: var(--tpp-purple);
-}
-
-/*
- * Teams' "Last read" divider closes the last-read post, and that is where the
- * folded card keeps it: paintLastRead copies Teams' own divider element in, so
- * the line, the word and the spacing are Teams' own. It takes no room in the
- * row: it hangs in the gap below the post, and placeLastRead (content.js) puts
- * it halfway between this post and the next, so it reads as centred between
- * them rather than leaning on the one above.
- */
-.tpp-last-read {
-  display: none;
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 2;
-  height: 20px;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  pointer-events: none;
-  color: var(--tpp-text-muted);
-}
-
-/* Folded or open: the line marks the boundary either way, so it never blinks off. */
-html[data-tpp-compact-posts] .tpp-post.tpp-previewed .tpp-last-read {
-  display: flex !important;
-}
-
-/*
- * A line needs air. The post that closes the read section gives back a band under
- * the card, and placeLastRead centres the line in that roomier gap — so it sits
- * clear of both posts rather than touching one of their edges.
- */
-html[data-tpp-compact-posts] .tpp-post.tpp-last-read-row {
-  padding-bottom: 26px !important;
-}
-
-/* Teams' divider, copied: it keeps its own classes, it just fills the space. */
-.tpp-last-read-native {
-  flex: 1 1 auto;
-  min-width: 0;
-  max-height: 100% !important;
-  margin: 0 !important;
-}
-
-/*
- * Teams' own "Last read" divider is never hidden: where the page already shows
- * it, paintLastRead (content.js) paints no copy, so its space and its place are
- * Teams' own. The copy exists only for a divider the fold would otherwise cover.
- */
-
-/* The fallback shape, used only when there is no Teams divider to copy. */
-.tpp-last-read-line {
-  flex: 1 1 0;
-  height: 1px;
-  background: currentColor;
-  opacity: 0.35;
-}
-
-.tpp-last-read-label {
-  flex: none;
-  font: 400 12px/1.4 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
-  letter-spacing: normal;
-  text-transform: none;
-}
-
-/*
  * Archiving is a movement, not a disappearance: the post slides right and
  * fades, so the eye sees it leave rather than finding it gone. The tag that
- * hides it is written once the animation ends (animateArchiveOut).
+ * hides it is written once the animation ends (animateOut in content.js).
  */
 .tpp-post.tpp-archiving {
   animation: tpp-archive-out 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
@@ -797,6 +730,24 @@ html[data-tpp-compact-posts] .tpp-post.tpp-last-read-row {
   to {
     opacity: 0;
     transform: translateX(64px) scale(0.96);
+  }
+}
+
+/* Unarchiving is the same movement the other way: left, and fading out. */
+.tpp-post.tpp-unarchiving {
+  animation: tpp-unarchive-out 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  animation-delay: var(--tpp-archive-delay, 0ms);
+  pointer-events: none;
+}
+
+@keyframes tpp-unarchive-out {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-64px) scale(0.96);
   }
 }
 
@@ -877,81 +828,6 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-head * {
   white-space: nowrap !important;
 }
 
-
-/*
- * A pinned post's Archive is inert, not faded: it keeps the same weight as the
- * buttons beside it so the pinned post's rail reads like every other rail, and
- * its title says why it does nothing.
- */
-.tpp-archive-btn:disabled,
-.tpp-archive-btn:disabled:hover {
-  background: var(--tpp-surface);
-  border-color: var(--tpp-line);
-  color: var(--tpp-text-muted);
-  opacity: 1;
-  cursor: default;
-}
-
-/* Hover the seam between two posts: archive everything above -------------- */
-
-.tpp-gap {
-  position: fixed;
-  z-index: 2147483001;
-  display: none;
-  height: 0;
-  pointer-events: none;
-}
-
-.tpp-gap.is-on {
-  display: block;
-}
-
-.tpp-gap-line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  /* Centred on the seam itself, which is the mid-point of the gap. */
-  top: 0;
-  height: 2px;
-  transform: translateY(-50%);
-  border-radius: 2px;
-  background: linear-gradient(
-    90deg,
-    rgba(139, 92, 246, 0.15) 0%,
-    #8b5cf6 16%,
-    #8b5cf6 84%,
-    rgba(139, 92, 246, 0.15) 100%
-  );
-  box-shadow: 0 0 10px rgba(139, 92, 246, 0.55);
-}
-
-.tpp-gap-btn {
-  position: absolute;
-  left: 50%;
-  right: auto;
-  top: 0;
-  transform: translate(-50%, -50%);
-  pointer-events: auto;
-  height: 26px;
-  padding: 0 13px;
-  border: none;
-  border-radius: 999px;
-  background: #8b5cf6;
-  color: #fff;
-  font: 700 11.5px/1 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
-  white-space: nowrap;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.45);
-}
-
-.tpp-gap-btn:hover {
-  background: #7c3aed;
-}
-
-.tpp-gap-btn:focus-visible {
-  outline: 2px solid #fff;
-  outline-offset: 1px;
-}
 
 /* Shared: toast and jump highlight --------------------------------------- */
 
@@ -1192,12 +1068,9 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-head * {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tpp-confetti {
-    display: none;
-  }
-
-  /* Archive still waits for the post to leave, it just does not slide. */
-  .tpp-post.tpp-archiving {
+  /* Filing still waits for the post to leave, it just does not slide. */
+  .tpp-post.tpp-archiving,
+  .tpp-post.tpp-unarchiving {
     animation-duration: 0.01s;
   }
 

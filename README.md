@@ -27,36 +27,49 @@ Access can be revoked at any time from `chrome://extensions` → **Site access**
 
 ### Inbox Zero
 
-Every post gets **Archive** and **Pin** buttons in its left margin, which appear
-when you hover the post and stay out while it is open. Comments and replies
-never get them — only the post
-itself can be archived or pinned. The margin they float in is taken out of the
-message list's own left edge, not added to it, so no post moves on screen. Archiving hides the post from the channel, just
-like moving a read email out of your inbox; an archived post keeps only its
-**Unarchive** button, since it is no longer part of the channel view.
+Every post is **read** or **unread**, and gets **Archive** and **Pin** buttons
+in its left margin, which appear when you hover the post and stay out while it
+is open. Comments and replies never get them — only the post itself can be filed
+or pinned. The margin they float in is taken out of the message list's own left
+edge, not added to it, so no post moves on screen. Archiving marks the post read
+and takes it out of the channel view, just like moving a read email out of your
+inbox; a read post keeps only its **Unarchive** button, which marks it unread and
+brings it back.
 
-- A post carries no tag until you archive it: archiving tags it **archive**
-  and unarchiving removes the tag again, so an untagged post is an Inbox post.
-  New posts arrive untagged. The Inbox tab shows the untagged posts and the
-  Archive tab the archive-tagged ones, so a post is never in both.
-- When every post in the channel is archived, the empty space shows confetti and an
-  **Inbox Zero!** message.
+- Read state is Teams++'s own, not Teams'. The moment the extension is
+  installed is stored once, and every post Teams stamps after that moment starts
+  in the Inbox; everything already in the channel is read, so it is in the
+  Archive from the first visit. That is the whole rule — no badge to race, no
+  divider to misread.
+- From then on only the buttons change a post: **Archive** marks it read,
+  **Unarchive** marks it unread. A post is never in both tabs.
+- When every loaded post is read — an empty Inbox — the space says **Inbox
+  Zero!** and points at the Archive, rather than looking like a broken list.
 - **Inbox** and **Archive** sit in the channel tab bar in place of **Posts**,
   in its style: the Posts tab leaves the layout and the tabs beside it slide over
   by the width the pair needs, so **Shared**, **Files** and the rest stay put.
-  Archive is the Posts list filtered, not a second list: the same posts with
-  their tag set. Nothing is re-dressed, and the empty box Teams wrapped a
-  filtered-out post in goes with it, so no violet edges or ghost rows are left
-  behind. Posts carry an **Unarchive** button showing a white archive box in a
-  filled purple circle, the same filled treatment a pinned post's pin gets.
-- Hovering the space between two posts draws a purple line, never wider than a
-  post, with a centred **Archive all older posts** button. The two posts either
-  side of the line are compared by the date and time they show — not by where
-  they sit — and everything on the older side is archived in one click, so it is
-  right whether the channel lists newest-first or oldest-first, and after you
-  flip that in Teams' settings. The posts slide to the right and fade as they go
-  rather than vanishing.
-- If there is nothing archived yet, the Archive tab says so instead of looking
+  Archive is the Posts list filtered, not a second list: the same posts, read or
+  unread. Nothing is re-dressed, and the empty box Teams wrapped a filtered-out
+  post in goes with it, so no violet edges or ghost rows are left behind. Read
+  posts carry an **Unarchive** button showing a white archive box in a filled
+  purple circle, the same filled treatment a pinned post's pin gets.
+- A post you archive slides to the right and fades as it leaves the Inbox rather
+  than vanishing, so the eye sees where it went. Unarchiving sends it the other
+  way — left and out of sight — and the space it held closes up behind it.
+- The Inbox ends at its last post: scrolling is held to the last post on screen
+  rather than carrying on into blank space, and an Inbox shorter than the window
+  does not scroll at all.
+- Posts sit together with no gaps, in the order Teams posted them: a post the
+  view hides is closed up and takes no room at all, so each tab is one unbroken
+  run starting at the top of the list. The list keeps one constant block of room
+  after its last row (three windows tall, because Teams starts fetching well
+  before the end is on screen), so a nearly empty Inbox never looks like it has
+  run out — which is what stops Teams topping it up with the channel's
+  history — and the scroll is held short of the block, so it is never seen.
+  A tab with no post on show at all (an emptied Inbox) is the exception: nothing
+  is collapsed there, the list is left exactly as Teams laid it out and taken
+  out of sight, and the empty state speaks for it.
+- If nothing is read yet, the Archive tab says so instead of looking
   broken, and it leaves the channel's list exactly as Teams laid it out. Hiding
   every post in a virtualised list gives it no height, so it decides it has been
   scrolled to the end and fetches the channel's whole history; keeping the list
@@ -91,9 +104,9 @@ painted behind the posts, with the desktop setting only as a last resort — so 
 card matches Teams even when the desktop is set the other way, and it repaints
 the moment Teams switches.
 
-A folded post keeps the signals that tell you where to start reading: Teams' own
-**New** badge rides on the card, and the **Last read** divider closes the post
-that was last read — under its card, in Teams' own style.
+The card drops Teams' own **New** badge and **Last read** line on purpose: with
+an Inbox and an Archive, the tabs already say what is read, so a post is just
+name, time, headline and two lines.
 
 The switch lives in the popup and writes one synced preference, so it applies to
 every Teams tab and every signed-in Chrome profile.
@@ -115,16 +128,17 @@ channel tabs.
   to it, not a second copy of it — so unpinning only takes the bar away.
 - Pins belong to the channel they were made in. The bars show this channel's
   pins only, and each channel keeps its own list in `chrome.storage.sync` under
-  its path, so pinning in Biology 101 leaves Biology 202 with none. Pins made
-  before this change named no channel and are adopted by the channel the user is
-  in when the update runs.
+  its channel id — read from the whole route, path or hash, because the newest
+  Teams keeps the channel in the hash and every channel's path is the same — so
+  pinning in Biology 101 leaves Biology 202 with none. Pins filed under the old
+  shared key are adopted by the channel the user is in when the update runs.
 - Every pin keeps a copy of the post's words from the moment it is pinned. Teams
   stops holding old posts, so when the search reaches the end of the channel's
   history without finding one, the bar opens that copy in a read-only card
   instead of an apology — a pin always has something to show.
-- A pinned post is never archived, by the button or by **Archive all older
-  posts**: its Archive button is inert and says so, and the pin is taken down
-  first. That is what keeps a bar from pointing at a post that is hidden.
+- A pinned post carries only its **Pin** button: Archive is off the rail until
+  it is unpinned, because a bar must never point at a post hidden in the
+  Archive.
 - Teams only keeps the posts it has rendered, so an old pin is often not in the
   page at all. Clicking its bar walks the message list back through its history,
   pushing at the top of the list to make Teams fetch each older batch, and waits
@@ -196,8 +210,39 @@ done
   rows, tags them with `data-tpp-id`, and repairs buttons, hidden posts and overlays.
 - Posts are identified by Teams' `data-mid` / `data-message-id` / `data-item-id`
   when available, otherwise by a stable hash of the post text and timestamp.
-- Archived posts are hidden with CSS (`display: none`) rather than removed, so Teams
-  keeps rendering the thread and replies are still detected.
+- A post the current view filters out is closed up: no height, no margins, no
+  room in the list, so the posts on show form one unbroken run in Teams' own
+  order. Nothing is measured and nothing is compensated — that is deliberate. An
+  earlier build handed the hidden posts' height back to the list as padding, and
+  because that total was recomputed on every scan it moved the posts as it
+  changed. Instead one constant block of room sits after the last row
+  (`data-tpp-room`, set by `markRoom` on the box that holds the rows — Teams
+  measures that box, not the scrolling element, which is why padding on the
+  scroller only produced a scrollbar and no end to the paging): a list emptied by
+  the filter would
+  otherwise send it paging through the channel's whole history — and because the
+  room is after the rows and never recomputed, no post can move when it is
+  applied. A view with no post on show skips the collapse altogether and sets
+  `data-tpp-empty-view`, which hides the list: an all-collapsed pane is what
+  Teams kept re-measuring, with the posts jumping while it did.
+- The collapse also runs outside the scan: a MutationObserver callback fires
+  before the browser paints, so `absorbNodes` gives a freshly inserted read post
+  its id and its tucked mark right there. Otherwise a fetched batch painted at
+  full height and collapsed 300ms later, and the list appeared to leap for every
+  batch — on first load, and on every hover that made Teams re-render rows.
+- Because the filtered list is still taller than what is on show, the scroll is
+  clamped to the last post the current view displays (`clampScroll`). Otherwise
+  a wheel carried the view into the blank space where hidden posts sit, and
+  every one of those positions asked Teams for older posts, which arrived and
+  were hidden again. A pin search is exempt: it walks the list through its
+  history on purpose.
+- Read state comes from one synced timestamp: the moment the extension was
+  installed. A post stamped later is unread and waits in the Inbox; anything
+  older is read. Teams' unread badge and Last read divider are not consulted at
+  all — they clear themselves when a channel opens, which is what once swept a
+  whole channel into the Inbox in one scan.
+- Only the Archive and Unarchive buttons write per-post state, a small synced
+  map, so a channel's history costs no storage and nothing is ever re-decided.
 - Reply counts are read from Teams' "N replies" text. If Teams changes that wording,
   update `replyCount()` in `src/content/content.js`.
 - The UI is anchored to the message list with fixed positioning, recalculated on
@@ -255,8 +300,10 @@ To list every anchor Teams exposes on a page, run this in DevTools:
 - Reply counts are read from visible "N replies" text. A thread whose replies are only
   reachable through a separate pane may show zero, in which case a reply still
   un-archives it as soon as Teams shows a count.
-- The archive and pin maps are capped (150 posts and 40 pins) and trimmed if Chrome
-  Sync's per-item quota is reached. The newest entries are kept.
+- Read/unread decisions and pins are capped (240 posts and 40 pins) and trimmed
+  if Chrome Sync's per-item quota is reached. The newest entries are kept, so a
+  channel with more than 240 posts unread at once would file the oldest of them
+  as read.
 - Archived posts are hidden per channel by post id, not per Teams account. Because
   the data lives in Chrome Sync, a different signed-in Chrome profile sees the same
   archive only if Chrome Sync is enabled for the extension.

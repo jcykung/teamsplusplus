@@ -92,8 +92,8 @@ card matches Teams even when the desktop is set the other way, and it repaints
 the moment Teams switches.
 
 A folded post keeps the signals that tell you where to start reading: Teams' own
-**New** badge rides on the card, and the **Last read** divider is drawn over the
-seam above the first unread post.
+**New** badge rides on the card, and the **Last read** divider closes the post
+that was last read — under its card, in Teams' own style.
 
 The switch lives in the popup and writes one synced preference, so it applies to
 every Teams tab and every signed-in Chrome profile.

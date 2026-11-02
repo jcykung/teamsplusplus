@@ -713,39 +713,69 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-preview:hover .tpp-
 }
 
 /*
- * Teams' "Last read" divider sits in the row the card hides, so the folded view
- * draws its own on the seam above the post — a line and its label, in the page's
- * own text colour, so it reads on either theme.
+ * Teams' "Last read" divider closes the last-read post, and that is where the
+ * folded card keeps it: paintLastRead copies Teams' own divider element in, so
+ * the line, the word and the spacing are Teams' own. It takes no room in the
+ * row: it hangs in the gap below the post, and placeLastRead (content.js) puts
+ * it halfway between this post and the next, so it reads as centred between
+ * them rather than leaning on the one above.
  */
 .tpp-last-read {
   display: none;
   position: absolute;
-  top: 0;
+  top: 100%;
   left: 0;
   right: 0;
-  transform: translateY(-50%);
+  z-index: 2;
+  height: 20px;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  overflow: hidden;
   pointer-events: none;
   color: var(--tpp-text-muted);
-  font: 700 10px/1 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
 }
 
-html[data-tpp-compact-posts] .tpp-post.tpp-previewed:not(.tpp-unfold) .tpp-last-read {
+/* Folded or open: the line marks the boundary either way, so it never blinks off. */
+html[data-tpp-compact-posts] .tpp-post.tpp-previewed .tpp-last-read {
   display: flex !important;
 }
 
+/*
+ * A line needs air. The post that closes the read section gives back a band under
+ * the card, and placeLastRead centres the line in that roomier gap — so it sits
+ * clear of both posts rather than touching one of their edges.
+ */
+html[data-tpp-compact-posts] .tpp-post.tpp-last-read-row {
+  padding-bottom: 26px !important;
+}
+
+/* Teams' divider, copied: it keeps its own classes, it just fills the space. */
+.tpp-last-read-native {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 100% !important;
+  margin: 0 !important;
+}
+
+/*
+ * Teams' own "Last read" divider is never hidden: where the page already shows
+ * it, paintLastRead (content.js) paints no copy, so its space and its place are
+ * Teams' own. The copy exists only for a divider the fold would otherwise cover.
+ */
+
+/* The fallback shape, used only when there is no Teams divider to copy. */
 .tpp-last-read-line {
   flex: 1 1 0;
   height: 1px;
   background: currentColor;
-  opacity: 0.3;
+  opacity: 0.35;
 }
 
 .tpp-last-read-label {
   flex: none;
+  font: 400 12px/1.4 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 /*

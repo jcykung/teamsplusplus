@@ -123,14 +123,14 @@ html[data-tpp-inbox-zero] .tpp-post[data-tpp-tucked] {
  * the hidden posts is exactly what used to make them move. clampScroll keeps the
  * scroll short of it, so it is never seen.
  *
- * Three windows tall, not one: Teams decides it is near the end well before the
- * end is on screen — a lazy loader keeps a margin of a few hundred pixels — and
- * at one window the end still sat 395px under the fold of a 913px pane, which is
- * close enough to keep it fetching. Nothing on screen depends on the number, so
- * it is chosen to be safely out of reach.
+ * Its size is a top-up, not a block: clampScroll (content.js) measures the posts
+ * on show and fills the rest of the pane with this, so a short tab has no scroll
+ * range at all — no lock, no pull-back, no rubber band — and a tall one scrolls
+ * exactly as Teams drew it. It depends only on the posts on show, so a hidden
+ * batch arriving cannot change it.
  */
 html[data-tpp-inbox-zero] [data-tpp-room] {
-  padding-bottom: 300vh !important;
+  padding-bottom: var(--tpp-room, 0px) !important;
 }
 
 /*
@@ -173,12 +173,85 @@ html[data-tpp-inbox-zero][data-tpp-view="archives"]:not([data-tpp-has-archives])
  */
 
 /*
- * Teams' own shimmer stand-ins for posts it is still fetching (markLoadingRows
- * in content.js). With most posts hidden they read as a blank post at the
- * bottom of the Archives list, so they are taken out of the layout there.
+ * Teams' own stand-ins for posts it is still fetching — the shimmer rows and the
+ * spinner (markLoadingRows in content.js). They are taken out of the layout in
+ * both tabs, not just the Archive: a stand-in has a height, so every one of them
+ * made the list taller, shortened the scrollbar, and then vanished again when the
+ * batch arrived already closed up. That is the scrollbar that kept jumping, and
+ * the spinner that appeared when a pull at the bottom asked for more posts.
  */
-html[data-tpp-inbox-zero][data-tpp-view="archives"] [data-tpp-placeholder] {
+html[data-tpp-inbox-zero] [data-tpp-placeholder] {
   display: none !important;
+}
+
+/*
+ * Teams' loading spinner — `fui-Spinner__spinner` with its `Spinner__spinnerTail`
+ * — is what sits in the message pane while it fetches the next batch. It is hidden
+ * by class rather than left to the scan, so it is never painted at all: a style
+ * rule applies before the first paint, and a scan runs 300ms later. The pane's own
+ * spinners only ever mean "fetching more posts", which this tab does not want.
+ */
+html[data-tpp-inbox-zero]
+  [data-tid="message-pane-body"]
+  [class*="Spinner__spinner"] {
+  display: none !important;
+}
+
+/*
+ * A pull past the bottom is Teams' cue to fetch, and it chains up the page before
+ * the list has any say. Containing it keeps the gesture in the pane: with the
+ * room sized to fill the pane there is nothing to scroll to anyway, so the pull
+ * has no reason to ask anyone for more posts.
+ */
+html[data-tpp-inbox-zero] .tpp-list {
+  overscroll-behavior-y: contain;
+}
+
+/*
+ * The Inbox hides its scrollbar. The list is filtered, so the track described the
+ * hidden posts rather than the ones on show — and the thumb visibly shortened and
+ * lengthened as Teams inserted a loader or a batch. Scrolling still works, only
+ * the bar is out of sight. Hiding it clips nothing: this is the scrollbar, not the
+ * overflow.
+ */
+html[data-tpp-inbox-zero][data-tpp-view="inbox"] .tpp-list {
+  scrollbar-width: none;
+}
+
+html[data-tpp-inbox-zero][data-tpp-view="inbox"]
+  .tpp-list::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/*
+ * A post is hidden until our card has replaced it. Scans run 300ms after Teams
+ * changes the DOM, and without this the full post was painted first and then
+ * visibly turned into the condensed card. paintRow adds `tpp-ready` once the card
+ * is on the row, so the post appears as a card and never as anything else.
+ */
+html[data-tpp-compact-posts] .tpp-post:not(.tpp-ready) {
+  visibility: hidden !important;
+}
+
+/*
+ * A post Teams has drawn in one of its own panes — the view a channel search
+ * opens, a message's reply thread — is never ours to hide. A re-rendered copy
+ * arrives without our card, so the rule above left a found post out of sight
+ * with only its replies showing. inTeamsPane (content.js) keeps our marks off
+ * those rows; these keep them visible even if an old one is still there. Split
+ * into its own rule so a browser without `:has` drops only the last selector.
+ */
+html[data-tpp-compact-posts] [role="dialog"] .tpp-post:not(.tpp-ready),
+html[data-tpp-compact-posts] [data-tid*="replies-pane" i] .tpp-post:not(.tpp-ready),
+html[data-tpp-compact-posts] [data-tid*="message-detail" i] .tpp-post:not(.tpp-ready) {
+  visibility: visible !important;
+}
+
+html[data-tpp-compact-posts]
+  .tpp-post:not(.tpp-ready):has([data-tid*="replies-pane" i]) {
+  visibility: visible !important;
 }
 
 /*
@@ -343,20 +416,11 @@ html[data-tpp-inbox-zero][data-tpp-view="archives"] [data-tpp-placeholder] {
 }
 
 /*
- * Normally the stack sits in the page flow above the composer: it takes real
- * space, so it covers neither the channel tabs nor "Post in channel".
+ * The stack floats over the top of the list, under the channel tabs, and is
+ * positioned by script against the list's own box. It is never placed inside
+ * the list: that is Teams' scroll box, so anything in it scrolls away — which
+ * is what made a bar appear and then vanish.
  */
-.tpp-pin-stack--inline {
-  position: static !important;
-  top: auto !important;
-  left: auto !important;
-  right: auto !important;
-  bottom: auto !important;
-  width: auto !important;
-  z-index: auto;
-  overflow: visible;
-  padding: 2px 2px 6px;
-}
 
 /*
  * A pinned post is a purple bar until it is opened. Your own pins are the

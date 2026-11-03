@@ -48,7 +48,12 @@
       '[data-tid*="skeleton" i]',
       '[data-tid*="loading" i]',
       '[data-tid*="placeholder" i]',
-      '[class*="skeleton" i]'
+      '[data-tid*="spinner" i]',
+      '[data-tid*="progress" i]',
+      '[aria-label*="loading" i]',
+      '[role="progressbar"]',
+      '[class*="skeleton" i]',
+      '[class*="spinner" i]'
     ],
 
     /**

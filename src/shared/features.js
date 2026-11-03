@@ -34,21 +34,21 @@
       id: 'inboxZero',
       attr: 'data-tpp-inbox-zero',
       label: 'Inbox Zero',
-      hint: 'Adds Archive and Pin buttons to the left margin of every post. A post is read or unread: unread posts are your Inbox, and archiving marks a post read and files it in Archive. Anything posted after you installed Teams++ starts in the Inbox; everything already in the channel at install is read. Teams’ own New and Last read markers are no longer shown — the tabs say where you are.',
+      hint: 'Splits the channel into an Inbox of unread posts and an Archive of the rest. Archiving a post marks it read.',
       default: true
     },
     {
       id: 'pinnedMessages',
       attr: 'data-tpp-pinned-messages',
       label: 'Pinned message bars',
-      hint: 'Shows pinned posts as purple bars at the top of the channel. Click a bar to jump to the post where it sits in the stream; a pinned post shows only its Pin button until it is unpinned.',
+      hint: 'Shows pinned posts as purple bars at the top of the channel. Click one to jump to the post.',
       default: true
     },
     {
       id: 'compactPosts',
       attr: 'data-tpp-compact-posts',
       label: 'Compact posts',
-      hint: 'Shows every post as a card: the author, the time, the headline and the first two lines. Replies, reactions and images stay folded away until you open a post.',
+      hint: 'Shows each post as a card: author, time, headline and two lines. Open one to see the rest.',
       default: true
     }
   ];

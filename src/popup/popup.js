@@ -29,6 +29,59 @@
   const settingsGroup = document.getElementById('settingsGroup');
   const inputs = new Map();
 
+  /**
+   * One tooltip at a time, positioned by script.
+   *
+   * The hints used to be a CSS pseudo-element hung off the icon, which put them
+   * above it — and above the first card there is no room in the popup, so the
+   * top of the text was cut off. This measures the popup and places the tip
+   * below the icon, or above it when below would overflow, so the whole hint is
+   * always inside the window.
+   */
+  let tipEl = null;
+  let tipTimer = 0;
+
+  function hideTip() {
+    clearTimeout(tipTimer);
+    tipTimer = 0;
+    tipEl?.remove();
+    tipEl = null;
+  }
+
+  function showTip(anchor, text) {
+    hideTip();
+
+    const tip = document.createElement('div');
+    tip.className = 'tip';
+    tip.setAttribute('role', 'tooltip');
+    tip.textContent = text;
+    document.body.append(tip);
+    tipEl = tip;
+
+    const margin = 8;
+    const icon = anchor.getBoundingClientRect();
+    const box = tip.getBoundingClientRect();
+
+    let left = icon.left + icon.width / 2 - box.width / 2;
+    left = Math.max(margin, Math.min(left, window.innerWidth - box.width - margin));
+
+    let top = icon.bottom + 6;
+    if (top + box.height > window.innerHeight - margin) top = icon.top - box.height - 6;
+
+    tip.style.left = `${Math.round(left)}px`;
+    tip.style.top = `${Math.round(Math.max(top, margin))}px`;
+  }
+
+  function attachTip(anchor, text) {
+    anchor.addEventListener('mouseenter', () => {
+      clearTimeout(tipTimer);
+      tipTimer = setTimeout(() => showTip(anchor, text), 130);
+    });
+    anchor.addEventListener('mouseleave', hideTip);
+    anchor.addEventListener('focus', () => showTip(anchor, text));
+    anchor.addEventListener('blur', hideTip);
+  }
+
   function renderRow(feature) {
     const card = document.createElement('div');
     card.className = 'card';
@@ -39,9 +92,10 @@
 
     const info = document.createElement('span');
     info.className = 'info-icon';
-    info.dataset.tooltip = feature.hint;
     info.setAttribute('role', 'img');
     info.setAttribute('aria-label', feature.hint);
+    info.tabIndex = 0;
+    attachTip(info, feature.hint);
     label.append(info);
 
     const switchLabel = document.createElement('label');
@@ -140,6 +194,10 @@
   }
 
   for (const feature of FEATURES) list.append(renderRow(feature));
+
+  // A tooltip never outlives the popup or the scroll it was placed against.
+  window.addEventListener('scroll', hideTip, true);
+  window.addEventListener('blur', hideTip);
 
   chrome.storage.sync.get({ [STORAGE_KEY]: null }, (items) => {
     fill(normalize(items[STORAGE_KEY]));

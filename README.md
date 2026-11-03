@@ -57,15 +57,17 @@ brings it back.
   than vanishing, so the eye sees where it went. Unarchiving sends it the other
   way — left and out of sight — and the space it held closes up behind it.
 - The Inbox ends at its last post: scrolling is held to the last post on screen
-  rather than carrying on into blank space, and an Inbox shorter than the window
-  does not scroll at all.
+  rather than carrying on into blank space. A tab whose posts fit does not scroll
+  at all: the room after the last post is sized to fill the pane exactly, so there
+  is no scroll range — nothing is locked and nothing is pulled back, which is what
+  rubber-banded — and a tab whose posts need more room simply scrolls.
 - Posts sit together with no gaps, in the order Teams posted them: a post the
   view hides is closed up and takes no room at all, so each tab is one unbroken
-  run starting at the top of the list. The list keeps one constant block of room
-  after its last row (three windows tall, because Teams starts fetching well
-  before the end is on screen), so a nearly empty Inbox never looks like it has
-  run out — which is what stops Teams topping it up with the channel's
-  history — and the scroll is held short of the block, so it is never seen.
+  run starting at the top of the list. The room after the last row is only a
+  top-up — enough to fill the pane with the posts on show, never more — so a
+  nearly empty Inbox never looks like it has run out (which is what stops Teams
+  topping it up with the channel's history) and a short tab never has blank space
+  to scroll into.
   A tab with no post on show at all (an emptied Inbox) is the exception: nothing
   is collapsed there, the list is left exactly as Teams laid it out and taken
   out of sight, and the empty state speaks for it.
@@ -113,10 +115,11 @@ every Teams tab and every signed-in Chrome profile.
 
 ### Pinned posts
 
-Pinned posts sit at the very top of the channel pane, above the **Post in
-channel** box (and at the top even when the composer is docked at the bottom),
-in the page flow, so they take space rather than covering the composer or the
-channel tabs.
+Pinned posts sit at the very top of the channel pane, just under the Inbox /
+Archive tabs, floating over the list rather than living in it. Teams' list is a
+scroll box, so a bar placed inside it scrolls away the moment the Inbox opens on
+the newest post; anchored to the list's top edge it stays put, and the list
+reserves a matching padding so the first post is never covered.
 
 - Each pin is a purple bar reading `Author: subject` and the start of the post;
   clicking it eases the channel to the post and flashes it, rather than cutting
@@ -215,14 +218,15 @@ done
   order. Nothing is measured and nothing is compensated — that is deliberate. An
   earlier build handed the hidden posts' height back to the list as padding, and
   because that total was recomputed on every scan it moved the posts as it
-  changed. Instead one constant block of room sits after the last row
-  (`data-tpp-room`, set by `markRoom` on the box that holds the rows — Teams
-  measures that box, not the scrolling element, which is why padding on the
-  scroller only produced a scrollbar and no end to the paging): a list emptied by
-  the filter would
-  otherwise send it paging through the channel's whole history — and because the
-  room is after the rows and never recomputed, no post can move when it is
-  applied. A view with no post on show skips the collapse altogether and sets
+  changed. Instead a block of room sits after the last row (`data-tpp-room`, set
+  by `markRoom` on the box that holds the rows — Teams measures that box, not the
+  scrolling element, which is why padding on the scroller only produced a
+  scrollbar and no end to the paging): a list emptied by the filter would
+  otherwise send it paging through the channel's whole history. Its size is a
+  top-up, `clientHeight - shown`, computed in `clampScroll` from the posts on
+  show, so it fills the pane and stops: a short tab has no scroll range at all,
+  and because only the posts on show feed it, a hidden batch arriving cannot
+  change it. A view with no post on show skips the collapse altogether and sets
   `data-tpp-empty-view`, which hides the list: an all-collapsed pane is what
   Teams kept re-measuring, with the posts jumping while it did.
 - The collapse also runs outside the scan: a MutationObserver callback fires

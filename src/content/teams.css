@@ -897,8 +897,8 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-head * {
 
 /*
  * A status message is a small modal of its own: larger type on a translucent
- * surface, centred on the post that changed rather than on the page. The
- * position comes from placeToast in content.js.
+ * surface, dead centre on the page. It does not follow the post it is about —
+ * one action has to report itself in one place (placeToast in content.js).
  */
 .tpp-toast {
   position: fixed;

@@ -85,6 +85,8 @@
   const EMPTY_VIEW_ATTR = 'data-tpp-empty-view';
   /** The pin model, serialised onto <html> so DevTools can read it (see below). */
   const PIN_DEBUG_ATTR = 'data-tpp-pin-debug';
+  /** When the debug attribute was last written: it is a readout, not a feature. */
+  let pinDebugAt = 0;
   /**
    * The panes Teams draws a single post in, outside the Posts list: the view
    * "Find in channel" opens, a message's thread, a pinned post. Nothing of ours
@@ -96,7 +98,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-02.74';
+  const BUILD = '2026-11-02.79';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -512,9 +514,6 @@
     markIn(row);
   }
 
-  /** What a status message is centred on: the post that changed. */
-  let toastAnchor = null;
-
   // --------------------------------------------------------------- helpers
 
   function first(selectors, root) {
@@ -869,12 +868,26 @@
   }
 
   /**
-   * The line a pinned bar shows after the author: a post's subject is its first
-   * written line ("Jonathan Kung: Here are some good websites"). Only pinned
-   * posts are asked for it, since reading layout text is not free and the list
-   * is scanned on every Teams render.
+   * The subject Teams prints above a post's text: its own heading, which sits
+   * beside the body rather than in it. Read every time — `textContent` needs no
+   * line boxes, so this works on a post that is folded away onto its bar.
+   */
+  function headingOf(row) {
+    if (!row) return '';
+    const el = first(S.messageSubject, row);
+    return el ? collapse(el.textContent || '').slice(0, 140) : '';
+  }
+
+  /**
+   * The line a pinned bar shows after the author: the post's subject line. Only
+   * a post Teams prints no heading on falls back to its first written line,
+   * which is where the message starts. Only pinned posts are asked for it, since
+   * reading layout text is not free and the list is scanned on every Teams
+   * render.
    */
   function subjectOf(row) {
+    const heading = headingOf(row);
+    if (heading) return heading;
     if (!row) return '';
     const body = first(S.messageBody, row) || row;
     const lines = String(body.innerText || body.textContent || '').split(/\n+/);
@@ -1130,7 +1143,11 @@
       // the post is visible and reused after it moves onto its bar.
       let subject = text;
       if (pins[id] || nativePinned) {
-        subject = row.dataset.tppSubject || subjectOf(row) || text;
+        // The heading is read every time: it is text, not layout, so it works on
+        // a post folded away onto its bar. The remembered copy is the fallback
+        // for a post Teams prints no heading on, where the first line can only
+        // be read while the post still has line boxes.
+        subject = headingOf(row) || row.dataset.tppSubject || subjectOf(row) || text;
         if (row.dataset.tppSubject !== subject) row.dataset.tppSubject = subject;
       }
 
@@ -1431,7 +1448,9 @@
       // repaint the row even though nothing else about it changed.
       pins[row.dataset.tppId] ? '1' : '0',
       features.inboxZero ? '1' : '0',
-      features.pinnedMessages ? '1' : '0'
+      features.pinnedMessages ? '1' : '0',
+      // The rail differs by tab: the Inbox has a pin, the Archive does not.
+      view
     ].join('|');
 
     const railGone =
@@ -1594,7 +1613,9 @@
       // Keyed by post id, so one post can never grow two bars.
       rememberNativePin(id ? 'pane:' + id : 'pane:item:' + hash(text), {
         id,
-        text: record ? record.row.dataset.tppSubject || subjectOf(record.row) || text : text,
+        text: record
+          ? headingOf(record.row) || record.row.dataset.tppSubject || subjectOf(record.row) || text
+          : text,
         author: record ? authorOf(record.row) || author : author,
         paneItem: item
       });
@@ -1653,8 +1674,10 @@
     const pinnedNow = Boolean(pins[row.dataset.tppId]) || Boolean(nativePinned);
     // A pinned post carries its pin and not its archive: the bar points at the
     // post, so filing it away is not on offer until it is unpinned, and the
-    // rail then reads as the one button there is.
-    archiveBtn.hidden = !features.inboxZero || pinnedNow;
+    // rail then reads as the one button there is. In the Archive a pinned post
+    // is just a filed post — its pin lives in the Inbox — so unfiling it is
+    // still on offer there.
+    archiveBtn.hidden = !features.inboxZero || (pinnedNow && view !== VIEW_ARCHIVES);
     archiveBtn.disabled = false;
     // An archived post reads as archived the same way a pinned one reads as
     // pinned: a white box in a filled purple circle, which is also the control
@@ -1698,11 +1721,10 @@
       });
       actions.append(pinBtn);
     }
-    // The pin is on offer wherever the post is: in the Inbox, in the Archive,
-    // and with Inbox Zero switched off. Tying it to the read state hid it on
-    // every archived post — which, with Inbox Zero on, is every post in the
-    // Archive — so pinning looked broken. Only its own switch takes it away.
-    pinBtn.hidden = !features.pinnedMessages;
+    // Pinning belongs to the Inbox: the bars are drawn over the Inbox list, and
+    // the Archive is where filed posts are looked through. So the Archive
+    // offers no pin, and the switch still owns the feature everywhere else.
+    pinBtn.hidden = !features.pinnedMessages || view !== VIEW_INBOX;
 
     const locallyPinned = Boolean(pins[row.dataset.tppId]);
     // Pinned reads as a filled pin, unpinned as its outline.
@@ -2611,15 +2633,17 @@
 
   function renderPins(list) {
     const existing = document.getElementById(STACK_ID);
-    // Bars in both tabs: a pin belongs to the channel, not to the tab that
-    // happened to be open when it was made.
-    const entries = features.pinnedMessages ? buildPinEntries() : [];
+    // Pinning is an Inbox feature: the bars belong to the Inbox, and the Archive
+    // is where filed posts are looked through. Drawing them over the Archive put
+    // a pinned post's bar above a list it is not part of.
+    const allow = features.pinnedMessages && view !== VIEW_ARCHIVES;
+    const entries = allow ? buildPinEntries() : [];
 
     // A bar exists while a pin record exists. If the entry list came out empty
     // but the channel still holds pins, the entries are built straight from
     // them: taking the bars down and putting them back a moment later is the
     // blink, and the records are the truth.
-    if (entries.length === 0 && features.pinnedMessages && hasPinRecords()) {
+    if (entries.length === 0 && allow && hasPinRecords()) {
       for (const [id, pin] of Object.entries(pins)) {
         const record = rowsById.get(id);
         entries.push({
@@ -2639,7 +2663,7 @@
       // re-renders rows as batches load, and a bar that goes and comes back with
       // each one is the blink. The stack is removed only once the emptiness has
       // lasted — at once when the feature itself was switched off.
-      if (existing && list && features.pinnedMessages && !explicitPinChange) {
+      if (existing && list && allow && !explicitPinChange) {
         const now = Date.now();
         if (!emptyPinsAt) emptyPinsAt = now;
         if (now - emptyPinsAt < 800) return null;
@@ -2651,6 +2675,7 @@
           build: BUILD,
           hasPins: hasPinRecords(),
           featureOff: !features.pinnedMessages,
+          view,
           channel: pinChannel
         });
       }
@@ -3424,10 +3449,12 @@
   }
 
   /**
-   * A status message: a larger, translucent card centred on the post it is
-   * about, so the news appears where the change happened rather than on the
-   * bottom edge of the page. Without a post to hold on to it sits in the middle
-   * of the message list.
+   * A status message: a larger, translucent card dead centre on the page.
+   *
+   * It is a status of the page, not of a row, so it does not move with the list
+   * and does not appear somewhere different for the same action depending on
+   * what happens to be on screen. `anchor` is still accepted by callers but no
+   * longer moves the message; see placeToast.
    */
   function toast(message, anchor) {
     let el = document.getElementById(TOAST_ID);
@@ -3442,7 +3469,6 @@
     }
 
     el.textContent = message;
-    toastAnchor = anchor || null;
     placeToast(el);
 
     // Restart the entrance, so a second message in a row is noticed.
@@ -3453,30 +3479,39 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
       el.remove();
-      toastAnchor = null;
     }, 2600);
   }
 
-  /** Centres the status message on its post, following it while it is visible. */
+  /**
+   * Puts the status message in the middle of the posts, and the middle of the
+   * page.
+   *
+   * Horizontally it belongs over the post column, not over the window: Teams
+   * keeps its channel list on the left, so the centre of the screen sits to the
+   * left of the posts and a card there reads as belonging to the sidebar. A post
+   * row is the line asked for, and its rect already carries the gutter inset, so
+   * the list is only a fallback for a channel with nothing rendered in it.
+   *
+   * Vertically it is the middle of the page, and the card is fixed, so a scroll
+   * under it moves nothing.
+   */
   function placeToast(el) {
-    const anchor = toastAnchor;
     let box = null;
 
-    if (anchor) {
-      if (anchor.row && anchor.row.isConnected) {
-        const live = anchor.row.getBoundingClientRect();
-        if (live.width > 8 && live.height > 8) box = live;
-      }
-      if (!box) box = anchor.rect;
+    if (lastList && lastList.isConnected) {
+      const row = lastList.querySelector('.tpp-post');
+      const rect = row ? row.getBoundingClientRect() : null;
+      if (rect && rect.width > 40) box = rect;
     }
 
     if (!box) {
-      const list = lastList || findMessageList();
-      box = list ? list.getBoundingClientRect() : null;
+      const list = lastList && lastList.isConnected ? lastList : findMessageList();
+      const rect = list ? list.getBoundingClientRect() : null;
+      if (rect && rect.width > 40) box = rect;
     }
 
-    el.style.left = `${box ? box.left + box.width / 2 : window.innerWidth / 2}px`;
-    el.style.top = `${box ? box.top + box.height / 2 : window.innerHeight / 2}px`;
+    el.style.left = box ? `${Math.round(box.left + box.width / 2)}px` : '50%';
+    el.style.top = '50%';
   }
 
   function reposition() {
@@ -3503,9 +3538,6 @@
 
       const empty = document.getElementById(EMPTY_ID);
       if (empty) anchor(empty, list, { top: tabsPx + 18, full: true, matchHeight: true });
-
-      const message = document.getElementById(TOAST_ID);
-      if (message) placeToast(message);
 
       // Scrolling is the moment the list is asked for more, so the limit is
       // re-checked here — at most a few times a second, because measuring
@@ -3966,11 +3998,6 @@
     }
     if (channelMode !== true) return;
 
-    // A draft is being written or sent: hands off everything until it is gone.
-    // Re-padding the list, moving its scroll or rebuilding rows under an open
-    // composer is how a post ends up not being sent (see composerOpen).
-    if (composerOpen()) return;
-
     // The channel is the nearest painted thing to a post, so it is the best
     // answer to "is this page dark?" — and a scan is already running. Reading
     // the painted surface is not free, and the theme cannot change without the
@@ -3982,19 +4009,38 @@
     syncPinChannel();
 
     // A reply box that our own styles were put into by an earlier match is
-    // given back before this scan looks for the list again.
-    for (const el of document.querySelectorAll('.tpp-list')) {
-      if (!isComposeField(el)) continue;
-      el.classList.remove('tpp-list');
-      clearLeftInset(el);
-      clearTopInset(el);
+    // given back before this scan looks for the list again. Only the list this
+    // scan drew ever carries the class, so asking the document for every
+    // `.tpp-list` was a walk of the whole page on every single scan.
+    if (lastList && lastList.classList.contains('tpp-list') && isComposeField(lastList)) {
+      lastList.classList.remove('tpp-list');
+      clearLeftInset(lastList);
+      clearTopInset(lastList);
+      lastList = null;
     }
 
-    const list = findMessageList();
+    // Teams re-renders the list far more often than it swaps the page, so a
+    // list that is still on screen is the list: one `isConnected` read instead
+    // of five selectors and a climb from a row.
+    const list = lastList && lastList.isConnected ? lastList : findMessageList();
 
     // Our own overlays and buttons must not re-trigger the observer.
     if (observer) observer.disconnect();
     try {
+      // The Inbox/Archive pair lives in Teams' own tab strip, so it is drawn
+      // here — before anything that needs the message list or a quiet composer.
+      // A channel switch re-creates the strip and takes the pair with it; this
+      // puts it back in the same scan rather than after the posts have loaded,
+      // which is what left Teams' Posts tab sitting there for a second or more.
+      renderTabs(list);
+      if (!list) requestSettleScan();
+
+      // A draft is being written or sent: hands off everything that re-lays the
+      // page. The pair above is our own node in Teams' tab strip and cannot
+      // touch a draft; re-padding the list, moving its scroll or rebuilding
+      // rows under one can, and is how a post ends up not being sent.
+      if (composerOpen()) return;
+
       if (!list) {
         // Teams is between renders — a batch of posts arriving, the pane being
         // swapped — and for a moment there is no list to measure against. Taking
@@ -4032,10 +4078,26 @@
       lastScrollBox = scrollBoxFor(list);
       rebuildRows(list);
       markLoadingRows(list);
-      renderTabs(list);
       const pinRoom = renderPins(list);
       renderEmpty(list);
       uiDrawn = true;
+
+      // Teams stops mutating once a channel has rendered, and a scan only runs
+      // because something changed. So a view looked at while it was still
+      // arriving — posts not painted yet, the empty card not placeable yet, the
+      // pair still waiting for a tab to copy — stayed that way until the user
+      // happened to do something else. A few follow-ups let it converge, and
+      // the count is capped so an empty channel cannot scan forever.
+      const tabs = document.getElementById(TABS_ID);
+      if (
+        rowsById.size === 0 ||
+        document.getElementById(EMPTY_ID)?.style.display === 'none' ||
+        (tabs && !tabs.classList.contains('tpp-tabs--inline'))
+      ) {
+        requestSettleScan();
+      } else {
+        settleTries = 0;
+      }
 
       // Keep the first post clear of the floating tabs and pinned bars. The bars
       // usually hold their own room above Teams' composer (placePinStack), so
@@ -4141,12 +4203,36 @@
     return collectRows(node, false);
   }
 
-  function scheduleScan() {
+  /** Follow-up scans left for a view that has not finished arriving. */
+  let settleTries = 0;
+
+  /**
+   * Asks for one more scan shortly, for a view that is still half-drawn.
+   * Both timers are shared with the observer's own debounce: whichever is due
+   * first runs the scan, and a scan settles them both.
+   */
+  function requestSettleScan() {
+    if (settleTries >= 6 || rescanTimer || slowTimer) return;
+    settleTries += 1;
+    rescanTimer = setTimeout(() => {
+      rescanTimer = 0;
+      scan();
+    }, 400);
+  }
+
+  /**
+   * The scan after a change.
+   *
+   * A mounted pane — a channel switch, the Posts tab coming back — is waited on
+   * for a fraction of what a settled page's later edit is: the pair has to be
+   * back in the strip and the posts drawn, and the follow-ups cover the rest.
+   */
+  function scheduleScan(urgent) {
     if (rescanTimer) return;
     rescanTimer = setTimeout(() => {
       rescanTimer = 0;
       scan();
-    }, 300);
+    }, urgent ? 120 : 300);
   }
 
   /**
@@ -4180,6 +4266,11 @@
   ].join(',');
 
   function channelFurniture(node) {
+    // A node carrying a pane's worth of children is a mounted pane, and a pane
+    // is always worth a scan. The query below walks the whole subtree, and on a
+    // channel switch that subtree is the entire channel — paying for it here,
+    // before paint, was part of what made switching feel slow.
+    if (node.childElementCount > 6) return true;
     try {
       return Boolean(node.matches(CHANNEL_FURNITURE) || node.querySelector(CHANNEL_FURNITURE));
     } catch (_) {
@@ -4352,6 +4443,7 @@
    */
   function teardownChannelUi() {
     uiDrawn = false;
+    settleTries = 0;
     lastScrollBox = null;
     // Out of the Posts area: the next channel names its own id.
     pinnedChannelKey = '';
@@ -4360,7 +4452,6 @@
     }
     hideSearchCancel();
 
-    toastAnchor = null;
     lastList = null;
     listRect = null;
 
@@ -4481,7 +4572,14 @@
       // worth of them: Teams mounts whole panes on a channel switch, and walking
       // every one of those subtrees is what made switching feel slow.
       if (channelMode === true) {
-        const added = [];
+        // Two kinds of insert, and they want opposite treatment. A batch of
+        // posts arriving inside the list is absorbed here, before paint, so a
+        // fetched or re-rendered post is never drawn at full height and then
+        // tucked — a post "loading and quickly hiding" is exactly that. A
+        // mounted pane outside the list (a channel switch, the Posts tab coming
+        // back) is left to the scan: walking it before paint is the stall.
+        const inList = [];
+        const mounted = [];
         let relevant = false;
         let full = false;
         for (const record of records) {
@@ -4495,22 +4593,35 @@
           }
           for (const node of record.addedNodes) {
             if (node.nodeType !== 1) continue;
-            const inList = Boolean(lastList && (lastList.contains(node) || node.contains(lastList)));
-            // A mounted pane (a channel switch, the Posts tab coming back) is
-            // recognised by the furniture it brings; a chat preview or a timer
-            // changing elsewhere cannot reach the posts.
-            if (!inList && !channelFurniture(node)) continue;
-            if (!inList) relevant = true;
-            added.push(node);
-            if (added.length >= 60) {
+            // Anything landing inside the list can only be posts.
+            if (lastList && lastList.contains(node)) {
+              inList.push(node);
+              relevant = true;
+              if (inList.length >= 60) {
+                full = true;
+                break;
+              }
+              continue;
+            }
+            // Nothing else reaches the posts unless it brings channel furniture
+            // with it: a chat preview or a timer cannot.
+            if (!channelFurniture(node)) continue;
+            mounted.push(node);
+            relevant = true;
+            if (mounted.length >= 60) {
               full = true;
               break;
             }
           }
           if (full) break;
         }
-        if (added.length) absorbNodes(added);
-        if (relevant) scheduleScan();
+        // Any count of rows inside the list: the tuck has to land before the
+        // browser paints, or the post shows for a moment and then disappears.
+        if (inList.length) absorbNodes(inList);
+        // A pane is not a batch: only a handful of nodes is worth walking
+        // before paint, and a switch is left to the scan it schedules.
+        if (mounted.length && mounted.length <= 6) absorbNodes(mounted);
+        if (relevant) scheduleScan(true);
         else scheduleSlowScan();
       } else {
         scheduleScan();
@@ -4553,6 +4664,11 @@
   function publishPinDebug() {
     const html = document.documentElement;
     if (!html) return;
+    // A readout, not a feature: several scans a second each stringifying both
+    // pin maps is cost nobody can observe. Once a second is plenty to look at.
+    const now = Date.now();
+    if (now - pinDebugAt < 1000) return;
+    pinDebugAt = now;
     const stack = document.getElementById(STACK_ID);
     const state = JSON.stringify({
       build: BUILD,

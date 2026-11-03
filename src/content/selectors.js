@@ -117,8 +117,10 @@
      * usually puts its headline anyway.
      */
     messageSubject: [
+      '[data-tid="subject-line"]',
       '[id^="subject-"]',
       '[data-tid="post-message-subject"]',
+      '[data-tid*="subject-line" i]',
       '[data-tid*="post-subject" i]'
     ],
 

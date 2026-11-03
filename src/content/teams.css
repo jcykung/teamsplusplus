@@ -504,8 +504,11 @@ html[data-tpp-compact-posts]
 
 /* Inbox / Archives tabs -------------------------------------------------- */
 /*
- * These stand in for the channel's own "Posts" tab, so they are sized like a
- * tab label rather than like a button: compact, and underlined when active.
+ * These stand in for the channel's own "Posts" tab and are copies of it, so they
+ * are never given a look of their own — and never a home of their own either.
+ * The pair exists inside Teams' tab strip or not at all; there is no small
+ * free-floating strip, which used to appear over the page whenever the Posts tab
+ * could not be found.
  */
 
 .tpp-tabs {
@@ -537,51 +540,54 @@ html[data-tpp-compact-posts]
   cursor: pointer;
 }
 
-/*
- * Fallback strip, used only when there is no Posts tab to copy (a Teams build
- * we do not recognise): compact, with a purple bar under the active tab.
- */
-.tpp-tabs:not(.tpp-tabs--inline) .tpp-tab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 9px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--tpp-text-muted);
-  font: 600 12px/1 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
-.tpp-tabs:not(.tpp-tabs--inline) .tpp-tab:hover {
-  background: rgba(98, 100, 167, 0.12);
-  color: var(--tpp-purple);
-}
-
-.tpp-tabs:not(.tpp-tabs--inline) .tpp-tab.is-active,
-.tpp-tabs:not(.tpp-tabs--inline) .tpp-tab.is-active:hover {
-  color: var(--tpp-purple);
-  box-shadow: inset 0 -2px 0 var(--tpp-purple);
-}
-
 .tpp-tab:focus-visible {
   outline: 2px solid var(--tpp-purple);
   outline-offset: 1px;
 }
 
-/* Fallback placement when there is no Posts tab to sit on. */
-.tpp-tabs:not(.tpp-tabs--inline) {
-  z-index: 2147483000;
-  padding: 2px;
-  border: 1px solid var(--tpp-line);
-  border-radius: 8px;
-  background: var(--tpp-surface);
-  box-shadow: var(--tpp-shadow);
+/* Switching views: feedback while the posts arrive ----------------------- */
+/*
+ * A thin bar across the top of the list, shown only while a switch between the
+ * Inbox and the Archive is waiting for its posts. It has no frame and no label:
+ * it says the click landed, and it leaves as soon as the view is drawn.
+ */
+.tpp-progress {
+  position: fixed;
+  height: 3px;
+  z-index: 2147483002;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(98, 100, 167, 0.16);
+  pointer-events: none;
+}
+
+.tpp-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 42%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    rgba(98, 100, 167, 0) 0%,
+    var(--tpp-purple) 30%,
+    var(--tpp-purple) 70%,
+    rgba(98, 100, 167, 0) 100%
+  );
+  animation: tpp-progress 1.05s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes tpp-progress {
+  from {
+    transform: translateX(-105%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+html[data-tpp-theme="dark"] .tpp-progress {
+  background: rgba(168, 174, 255, 0.18);
 }
 
 /*
@@ -1006,6 +1012,13 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-head * {
 
   .tpp-toast.is-on {
     opacity: 1;
+    animation: none;
+  }
+
+  /* The switch bar still shows, it just does not travel. */
+  .tpp-progress::after {
+    width: 100%;
+    opacity: 0.55;
     animation: none;
   }
 

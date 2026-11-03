@@ -79,7 +79,13 @@ brings it back.
 - The tabs carry no count: a number could only ever count the posts Teams has
   mounted right now, so it would move on its own as the list virtualises.
 - Clicking either tab also asks Teams for the Posts panel, so both of them still
-  work after you have visited Shared, Calendar or another channel tab.
+  work after you have visited Shared, Calendar or another channel tab. That panel
+  is Teams' to re-render, so a thin bar crosses the top of the list while the
+  posts for the chosen view are still arriving, and leaves as soon as they are
+  there — the click is never answered with a blank area and no explanation.
+- A view that is still arriving is re-scanned every 200 ms for a couple of
+  seconds, so its posts and their condensed cards appear as soon as Teams renders
+  them rather than waiting for the next unrelated change to the page.
 
 ### Compact posts
 
@@ -127,12 +133,10 @@ reserves a matching padding so the first post is never covered.
   adds no pin of its own: there is no Pin button on a post, no saved copy, and
   nothing of ours to keep in step with Teams.
 - Each pin is a purple bar reading `Author: subject` and the start of the post.
-- Clicking a bar opens the post the way Teams does: it clicks the post's own item
-  in the **Pinned** accordion under "In this channel", so Teams brings the post
-  into the channel — loading older history if it has to — and focuses it. The
-  list then lines the post up with the top of the scroll area, so it reads from
-  its first line down. If the accordion is closed it is opened first; if the
-  sidebar is not on screen at all, the channel is searched the long way (below).
+- Clicking a bar opens the post in the channel: the card unfolds, the list lines
+  the post up with the top of the scroll area so it reads from its first line
+  down, and the post takes the keyboard so Teams' shortcuts act on it. If the
+  post is not loaded yet, the channel is searched the long way (below).
 - A pinned post stays in the channel where it was posted — the bar is a shortcut
   to it, not a second copy of it.
 - The post is never moved or re-parented, so replies, reactions, the reply box,

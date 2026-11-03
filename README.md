@@ -44,7 +44,10 @@ brings it back.
 - From then on only the buttons change a post: **Archive** marks it read,
   **Unarchive** marks it unread. A post is never in both tabs.
 - When every loaded post is read — an empty Inbox — the space says **Inbox
-  Zero!** and points at the Archive, rather than looking like a broken list.
+  Zero!** and points at the Archive, rather than looking like a broken list. That
+  sign gets one round of confetti each time it appears, and that is its own
+  switch (**Inbox Zero confetti**) in the popup, so a quiet Inbox stays quiet.
+  The round is skipped entirely when the system asks for reduced motion.
 - **Inbox** and **Archive** sit in the channel tab bar in place of **Posts**,
   in its style: the Posts tab leaves the layout and the tabs beside it slide over
   by the width the pair needs, so **Shared**, **Files** and the rest stay put.
@@ -79,10 +82,7 @@ brings it back.
 - The tabs carry no count: a number could only ever count the posts Teams has
   mounted right now, so it would move on its own as the list virtualises.
 - Clicking either tab also asks Teams for the Posts panel, so both of them still
-  work after you have visited Shared, Calendar or another channel tab. That panel
-  is Teams' to re-render, so a thin bar crosses the top of the list while the
-  posts for the chosen view are still arriving, and leaves as soon as they are
-  there — the click is never answered with a blank area and no explanation.
+  work after you have visited Shared, Calendar or another channel tab.
 - A view that is still arriving is re-scanned every 200 ms for a couple of
   seconds, so its posts and their condensed cards appear as soon as Teams renders
   them rather than waiting for the next unrelated change to the page.
@@ -162,9 +162,11 @@ reserves a matching padding so the first post is never covered.
 - Status messages (archived, unarchived, pins) are a larger translucent card in
   the middle of the posts, so an action always reports itself in the same place.
 
-All three features are independent switches in the popup. Archive state and the
-current view are stored in `chrome.storage.sync`, so they follow the user to every
-Chrome profile signed in with the same account.
+Inbox Zero, Compact posts and Inbox Zero confetti are independent switches in the
+popup. The pinned bars are part of the Inbox rather than a preference — they have
+no switch and are always on. Archive state and the current view are stored in
+`chrome.storage.sync`, so they follow the user to every Chrome profile signed in
+with the same account.
 
 ## Layout
 

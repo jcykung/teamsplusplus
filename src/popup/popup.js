@@ -193,7 +193,12 @@
     });
   }
 
-  for (const feature of FEATURES) list.append(renderRow(feature));
+  // Locked features are part of the extension rather than a preference: the
+  // pin bars have no switch, so no row is drawn for them.
+  for (const feature of FEATURES) {
+    if (feature.locked) continue;
+    list.append(renderRow(feature));
+  }
 
   // A tooltip never outlives the popup or the scroll it was placed against.
   window.addEventListener('scroll', hideTip, true);

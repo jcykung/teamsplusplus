@@ -8,7 +8,7 @@
  * Everything the extension remembers lives in chrome.storage.sync so it
  * follows the user to every Chrome profile signed in with the same account:
  *
- *   teamsPlusPlus.features  on/off switches for the two features
+ *   teamsPlusPlus.features  on/off switches for the features
  *   teamsPlusPlus.unread    post id -> { t: time, r: 0 unread | 1 read }, the
  *                           few posts whose state is not the default. A post
  *                           with no entry is read, so a channel's whole history
@@ -40,13 +40,24 @@
       attr: 'data-tpp-pinned-messages',
       label: 'Pinned message bars',
       hint: 'Shows the posts pinned for the whole channel as purple bars at the top. Click one to open it.',
-      default: true
+      default: true,
+      // Not a choice: the bars are part of the Inbox and have no switch in the
+      // popup. Locked features ignore storage, so an older build's "off" — or a
+      // hand-edited sync value — cannot turn them off for this user.
+      locked: true
     },
     {
       id: 'compactPosts',
       attr: 'data-tpp-compact-posts',
       label: 'Compact posts',
       hint: 'Shows each post as a card: author, time, headline and two lines. Open one to see the rest.',
+      default: true
+    },
+    {
+      id: 'inboxConfetti',
+      attr: 'data-tpp-inbox-confetti',
+      label: 'Inbox Zero confetti',
+      hint: 'Throws one round of confetti when the Inbox Zero sign appears. Turn it off for a quiet Inbox.',
       default: true
     }
   ];
@@ -62,6 +73,9 @@
     const state = { ...DEFAULTS };
     if (stored && typeof stored === 'object') {
       for (const feature of FEATURES) {
+        // A locked feature is always its default: it has no switch, so nothing
+        // in storage may describe it as off.
+        if (feature.locked) continue;
         if (typeof stored[feature.id] === 'boolean') {
           state[feature.id] = stored[feature.id];
         }

@@ -107,6 +107,22 @@ html[data-tpp-inbox-zero] .tpp-post[data-tpp-tucked] {
   border: 0 !important;
   overflow: hidden !important;
   visibility: hidden !important;
+  /* The box keeps its place in Teams' arithmetic, the contents stop existing. */
+  content-visibility: hidden !important;
+}
+
+/*
+ * A tucked post is still a whole post underneath: an open one in the other tab
+ * keeps its body, its attachments, its images and whatever player Teams put in
+ * it. A zero-height, visibility-hidden box does not hide all of that — a
+ * `position: fixed` descendant is laid out against the window rather than the
+ * box, and a child can turn visibility back on for itself — which is how an
+ * attachment from the Archive was painted into the Inbox. Nothing inside a
+ * tucked post is drawn at all, so switching tabs can never leave a piece of the
+ * other tab behind.
+ */
+html[data-tpp-inbox-zero] .tpp-post[data-tpp-tucked] * {
+  display: none !important;
 }
 
 /*
@@ -143,6 +159,43 @@ html[data-tpp-inbox-zero] [data-tpp-room] {
  */
 html[data-tpp-inbox-zero][data-tpp-empty-view] .tpp-list {
   visibility: hidden !important;
+}
+
+/*
+ * And nothing inside it may put itself back: an attachment card, a player or a
+ * hover layer can carry `visibility: visible` of its own, which inherits over
+ * the hidden list and paints where the post used to be. Hiding the list alone
+ * is not enough — every descendant is held hidden, and the layout underneath is
+ * left exactly as Teams measured it, so the empty tab still does not look empty
+ * to Teams' own paging.
+ */
+html[data-tpp-inbox-zero][data-tpp-empty-view] .tpp-list *,
+html[data-tpp-inbox-zero][data-tpp-view="archives"]:not([data-tpp-has-archives])
+  .tpp-list
+  * {
+  visibility: hidden !important;
+}
+
+/* Our own rail is chrome, not content: it comes out of the layout entirely. */
+html[data-tpp-inbox-zero][data-tpp-empty-view] .tpp-list [data-tpp-ui],
+html[data-tpp-inbox-zero][data-tpp-view="archives"]:not([data-tpp-has-archives])
+  .tpp-list
+  [data-tpp-ui] {
+  display: none !important;
+}
+
+/*
+ * Teams also drops some attachment cards into a layer of its own, outside the
+ * list, so hiding the list cannot reach them. A card belongs to a post that the
+ * current tab is not showing: while the tab has nothing on show, no content
+ * card is painted at all. A dialog is its own surface and is left alone, so a
+ * file opened by the user is not taken away with the leak.
+ */
+html[data-tpp-inbox-zero][data-tpp-empty-view]
+  [data-testid*="content-card" i]:not([role="dialog"] *),
+html[data-tpp-inbox-zero][data-tpp-view="archives"]:not([data-tpp-has-archives])
+  [data-testid*="content-card" i]:not([role="dialog"] *) {
+  display: none !important;
 }
 
 /*
@@ -393,7 +446,15 @@ html[data-tpp-compact-posts]
 /* Pinned posts: thin stacked bars --------------------------------------- */
 
 .tpp-pin-stack {
-  z-index: 2147483000;
+  /*
+   * Above the posts and their gutter buttons, below Teams' own overlays. The
+   * stack is a fixed element in the page, so it needs only to clear the list's
+   * content; a Teams menu opens in a portal far above this layer. The huge
+   * value this used to carry put the bars over the Add-a-tab dropdown (and any
+   * other menu near the top of the list), because nothing Teams opens could
+   * out-rank it.
+   */
+  z-index: 8;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -545,49 +606,62 @@ html[data-tpp-compact-posts]
   outline-offset: 1px;
 }
 
-/* Switching views: feedback while the posts arrive ----------------------- */
+/* Inbox Zero: one round of confetti -------------------------------------- */
 /*
- * A thin bar across the top of the list, shown only while a switch between the
- * Inbox and the Archive is waiting for its posts. It has no frame and no label:
- * it says the click landed, and it leaves as soon as the view is drawn.
+ * The layer is a point at the middle of the Inbox Zero words: celebrateZero puts
+ * it there, sets each piece's own flight — up and out to an apex, then down past
+ * the window — and leaves the layer with no box at all, so the pieces fan out
+ * from the sign in every direction instead of starting in a line. They fall all
+ * the way down before they go.
  */
-.tpp-progress {
+.tpp-confetti {
   position: fixed;
-  height: 3px;
-  z-index: 2147483002;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(98, 100, 167, 0.16);
+  height: 0;
+  z-index: 2147483003;
   pointer-events: none;
+  overflow: visible;
 }
 
-.tpp-progress::after {
-  content: "";
+.tpp-confetti-piece {
   position: absolute;
-  inset: 0;
-  width: 42%;
-  border-radius: inherit;
-  background: linear-gradient(
-    90deg,
-    rgba(98, 100, 167, 0) 0%,
-    var(--tpp-purple) 30%,
-    var(--tpp-purple) 70%,
-    rgba(98, 100, 167, 0) 100%
-  );
-  animation: tpp-progress 1.05s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  top: 0;
+  left: var(--tpp-x, 0px);
+  width: 7px;
+  height: 10px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: tpp-confetti-burst var(--tpp-time, 2.2s) ease-out var(--tpp-delay, 0ms)
+    forwards;
+  will-change: transform, opacity;
 }
 
-@keyframes tpp-progress {
-  from {
-    transform: translateX(-105%);
+/*
+ * Two stages, because a burst is two motions: thrown out and slowing, then
+ * falling faster and faster. The apex is high and to one side, so the pieces
+ * spread across the top of the sign rather than dropping in a line, and only the
+ * last of the fall fades — the confetti disappears at the bottom of the screen,
+ * not in mid-air.
+ */
+@keyframes tpp-confetti-burst {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.15, 0.75, 0.32, 1);
   }
-  to {
-    transform: translateX(340%);
+  34% {
+    transform: translate3d(var(--tpp-apex-x, 0px), var(--tpp-apex-y, -140px), 0)
+      rotate(calc(var(--tpp-spin, 480deg) * 0.3));
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0, 0.85, 0.5);
   }
-}
-
-html[data-tpp-theme="dark"] .tpp-progress {
-  background: rgba(168, 174, 255, 0.18);
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(var(--tpp-land-x, 0px), var(--tpp-fall, 320px), 0)
+      rotate(var(--tpp-spin, 480deg));
+    opacity: 0;
+  }
 }
 
 /*
@@ -1015,11 +1089,16 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-head * {
     animation: none;
   }
 
-  /* The switch bar still shows, it just does not travel. */
-  .tpp-progress::after {
-    width: 100%;
-    opacity: 0.55;
-    animation: none;
-  }
+}
 
+/* The Inbox Zero sign: one channel, one tab, nothing else ------------------ */
+/*
+ * The sign names an Inbox with nothing left in it, so it may only ever be in
+ * that Inbox: not in the Archive, not over another channel tab, and not at all
+ * where the feature is off. The content script removes it as well; this is the
+ * backstop that makes a wrong placement impossible even for a frame.
+ */
+html:not([data-tpp-inbox-zero]) .tpp-empty-state,
+html[data-tpp-inbox-zero]:not([data-tpp-view="inbox"]) .tpp-empty-state[data-tpp-kind="zero"] {
+  display: none !important;
 }

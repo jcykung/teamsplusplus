@@ -69,7 +69,7 @@
    * reuses that pane, and it is filled a moment after the list is; read too
    * soon it still holds the channel before this one.
    */
-  const PIN_PANE_SETTLE = 700;
+  const PIN_PANE_SETTLE = 1000;
   /** A short hold for a pin Teams itself took down, against a stale sidebar. */
   const UNPIN_QUICK_HOLD = 3000;
   /** How long a post the user just unpinned is kept clear of a returning bar. */
@@ -101,7 +101,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-02.113';
+  const BUILD = '2026-11-02.115';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -1723,6 +1723,17 @@
     return null;
   }
 
+  /** What the visible pinned list is saying, as one comparable string. */
+  function pinPaneSignature(pane) {
+    if (!pane) return '';
+    let signature = '';
+    for (const item of pane.querySelectorAll('[role="menuitem"]')) {
+      const text = paneItemText(item);
+      signature += `${text}\u241f${paneItemAuthor(item, text)}\u241e`;
+    }
+    return signature.slice(0, 2000);
+  }
+
   /**
    * Picks up the posts pinned for the whole channel from Teams' own list.
    *
@@ -1824,6 +1835,22 @@
     const pane = pinnedPaneOnScreen();
     if (!pane) return;
 
+    // The pane Teams reuses may still be showing the channel before this one.
+    // Its words are only trusted once they differ from what the old channel
+    // said; until then an item has to point at a post on screen that Teams
+    // itself marks pinned, which no stale list can fake.
+    const signature = pinPaneSignature(pane);
+    const stale = Boolean(pinPaneStaleSig && signature === pinPaneStaleSig);
+    if (stale) {
+      if (pinPaneStaleTries < 8) {
+        pinPaneStaleTries += 1;
+        scheduleScan(true);
+      }
+    } else {
+      pinPaneStaleSig = '';
+      pinPaneStaleTries = 0;
+    }
+
     const listed = new Set();
 
     for (const item of pane.querySelectorAll('[role="menuitem"]')) {
@@ -1836,6 +1863,10 @@
       const record = pinnedSidebarPost(text, author);
       const id = record ? record.id : '';
       if (id) listed.add(id);
+
+      // An old pane's item is only this channel's pin if the post it names is
+      // on screen and wears Teams' own pin marker right now.
+      if (stale && !(record && record.row.dataset.tppNativePin === '1')) continue;
 
       // The user has just unpinned this post: Teams' list has not caught up yet,
       // and re-filing it here is the bar that refused to go away.
@@ -1855,6 +1886,7 @@
       });
     }
 
+    pinPaneLastSig = signature;
     sweepNativePins(listed);
   }
 
@@ -2166,6 +2198,12 @@
   let pinSwitchPending = false;
   /** Until when the pinned sidebar is still catching up with the new channel. */
   let pinSettleUntil = 0;
+  /** The sidebar's words as of the last harvest, to spot a pane that never changed. */
+  let pinPaneLastSig = '';
+  /** The signature the sidebar had before the channel changed. */
+  let pinPaneStaleSig = '';
+  /** Follow-up scans asked for while that old pane is still on screen. */
+  let pinPaneStaleTries = 0;
   /** When the message list first went missing, in ms, or 0 while it is there. */
   let listMissingAt = 0;
   /** When the verdict first said "not a channel", in ms, or 0 while it says yes. */
@@ -3746,19 +3784,90 @@
    * previous key whenever an unrecognised route came up put every such channel
    * into one bucket, so the bars of the last channel were shown in all of them.
    */
+  /**
+   * The channel name Teams prints above the posts, when it is on screen.
+   *
+   * The URL is no help in this Teams build: it stays at the root for every
+   * channel, so the header is the only identity the page itself offers.
+   */
+  function channelTitle() {
+    let nodes = [];
+    try {
+      nodes = document.querySelectorAll('[data-tid="channelTitle-text"]');
+    } catch (_) {
+      return null;
+    }
+    for (const node of nodes) {
+      if (!node.getClientRects().length) continue;
+      const text = collapse(node.textContent || '');
+      if (text) return text;
+    }
+    return null;
+  }
+
+  /** The team name Teams leaves beside the channel, when it renders one. */
+  function teamTitle() {
+    const selectors = [
+      '[data-tid="teamTitle-text"]',
+      '[data-tid*="team-title" i]',
+      '[data-tid*="teamTitle" i]',
+      '[data-tid*="team-name" i]'
+    ];
+    for (const selector of selectors) {
+      let nodes = [];
+      try {
+        nodes = document.querySelectorAll(selector);
+      } catch (_) {
+        continue;
+      }
+      for (const node of nodes) {
+        if (!node.getClientRects().length) continue;
+        const text = collapse(node.textContent || '');
+        if (text) return text;
+      }
+    }
+    return '';
+  }
+
   function channelKey() {
-    const href = String(location.href || '');
-    const route = href.match(/\/channel\/([^/?#]+)/i);
-    if (route) {
-      const id = channelIdOf(route[1]);
-      const teamMatch =
-        href.match(/[?&]groupId=([^&#]+)/i) || href.match(/\/team\/([^/?#]+)/i);
-      const team = teamMatch ? channelIdOf(teamMatch[1]) : '';
-      return CHANNEL_PREFIX + (team ? team + '/' : '') + id;
+    // The channel's own name, plus its team when Teams shows one. This is the
+    // only identity that changes in this build: `location.href` is the same
+    // root URL in every channel, so a URL-only key put all of them in one
+    // bucket — which is how a channel's bars followed the user to the next one.
+    const title = channelTitle();
+    if (title) {
+      return `title:${channelIdOf(teamTitle())}|${channelIdOf(title)}`;
     }
 
-    const rest = `${location.pathname || ''}${location.hash || ''}`
-      .replace(/[?#].*$/, '')
+    const href = String(location.href || '');
+    let params = null;
+    try {
+      params = new URL(href).searchParams;
+    } catch (_) {
+      params = null; // An unparsable URL still has the route below.
+    }
+
+    // New Teams does not always put the channel in the path: a channel can sit
+    // on a bare route with `channelId` (and the team as `groupId`) in the query.
+    // Keying only the path and hash gave every one of those channels the same
+    // bucket, which is exactly how one channel's bars survived a channel change.
+    const route = href.match(/\/channel\/([^/?#]+)/i);
+    const fromQuery = params
+      ? params.get('channelId') || params.get('channelid') || ''
+      : '';
+    const id = route ? route[1] : fromQuery;
+    if (id) {
+      const teamMatch =
+        (params && (params.get('groupId') || params.get('teamId'))) ||
+        (href.match(/[?&]groupId=([^&#]+)/i) || href.match(/\/team\/([^/?#]+)/i) || [])[1] ||
+        '';
+      const team = teamMatch ? channelIdOf(teamMatch) : '';
+      return CHANNEL_PREFIX + (team ? team + '/' : '') + channelIdOf(id);
+    }
+
+    // No channel named anywhere: the whole route is the identity, query string
+    // included. Leaving the search out made two different channels look alike.
+    const rest = `${location.pathname || ''}${location.search || ''}${location.hash || ''}`
       .replace(/\/+$/, '');
     return rest ? `route:${rest.slice(0, 300)}` : 'route:teams';
   }
@@ -3796,6 +3905,9 @@
       nativePins.clear();
       explicitPinChange = true;
     }
+    // The bars go now, not at the end of the scan: the channel before this one
+    // must not be on screen for even one more frame.
+    document.getElementById(STACK_ID)?.remove();
     pinSwitchPending = true;
 
     // Teams rewrites the route while it settles a channel, and a key that flips
@@ -3811,11 +3923,37 @@
     pinChannelNext = '';
     pinSwitchPending = false;
     pinSettleUntil = Date.now() + PIN_PANE_SETTLE;
+    pinPaneStaleSig = pinPaneLastSig;
+    pinPaneStaleTries = 0;
 
     nativePins.clear();
 
     pinChannel = channel;
     return true;
+  }
+
+  /**
+   * Drops every bar the moment the channel's own furniture is replaced.
+   *
+   * A channel switch re-creates the tab strip, and usually the message list
+   * with it. Whatever pins were read before that are not this channel's, so
+   * they go at once; the scan that follows re-reads the channel now on screen.
+   * This also covers a build that keeps the same URL for every channel, where
+   * the route alone can never notice the move.
+   */
+  function clearPinsForChannelChange() {
+    if (nativePins.size) {
+      nativePins.clear();
+      explicitPinChange = true;
+    }
+    pinChannelNext = '';
+    pinSwitchPending = true;
+    // The sidebar is reused across channels and filled a moment later: leave it
+    // alone until it has had time to show the channel now on screen.
+    pinSettleUntil = Date.now() + PIN_PANE_SETTLE;
+    pinPaneStaleSig = pinPaneLastSig;
+    pinPaneStaleTries = 0;
+    document.getElementById(STACK_ID)?.remove();
   }
 
   // -------------------------------------------------------------- persistence
@@ -4390,6 +4528,26 @@
    * Asked only about nodes inserted outside the list, which is where a channel
    * switch and the Posts tab coming back arrive.
    */
+  /** A node whose arrival or removal means the channel itself changed. */
+  const CHANNEL_SWAP_NODE = '[role="tablist"], [data-tid="channel-pane-message-list"]';
+
+  /**
+   * Is this node the channel's furniture being replaced?
+   *
+   * Our own Inbox/Archive wrap is itself a tab list inside Teams' strip, so it
+   * is explicitly not a channel change: without that, putting the pair back
+   * would clear the pins it was drawn beside.
+   */
+  function channelSwapNode(node) {
+    if (!node || node.nodeType !== 1) return false;
+    if (node.id === TABS_ID || node.closest?.(`#${TABS_ID}`)) return false;
+    try {
+      return node.matches(CHANNEL_SWAP_NODE);
+    } catch (_) {
+      return false;
+    }
+  }
+
   const CHANNEL_FURNITURE = [
     '[data-tid="post-message-subheader"]',
     '[data-tid="message-pane-list-runway"]',
@@ -4587,6 +4745,9 @@
     pinChannelNext = '';
     pinSwitchPending = false;
     pinSettleUntil = 0;
+    pinPaneLastSig = '';
+    pinPaneStaleSig = '';
+    pinPaneStaleTries = 0;
     for (const id of [TABS_ID, STACK_ID, EMPTY_ID, TOAST_ID, CONFETTI_ID]) {
       document.getElementById(id)?.remove();
     }
@@ -4715,6 +4876,7 @@
         const inList = [];
         const mounted = [];
         let relevant = false;
+        let switched = false;
         let full = false;
         for (const record of records) {
           const target = record.target;
@@ -4723,10 +4885,16 @@
           }
           // The list itself going away is the biggest change there is.
           for (const node of record.removedNodes) {
-            if (node.nodeType === 1 && lastList && node.contains(lastList)) relevant = true;
+            if (node.nodeType !== 1) continue;
+            if (lastList && node.contains(lastList)) {
+              relevant = true;
+              switched = true;
+            }
+            if (channelSwapNode(node)) switched = true;
           }
           for (const node of record.addedNodes) {
             if (node.nodeType !== 1) continue;
+            if (channelSwapNode(node)) switched = true;
             // Anything landing inside the list can only be posts.
             if (lastList && lastList.contains(node)) {
               inList.push(node);
@@ -4749,6 +4917,8 @@
           }
           if (full) break;
         }
+        // A new channel is in front: its pins are not the ones on screen.
+        if (switched) clearPinsForChannelChange();
         // Any count of rows inside the list: the tuck has to land before the
         // browser paints, or the post shows for a moment and then disappears.
         if (inList.length) absorbNodes(inList);

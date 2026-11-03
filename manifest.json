@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Teams++",
   "short_name": "Teams++",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Inbox Zero for Microsoft Teams channels — unread posts in the Inbox, read ones in the Archive, and pinned posts one click away.",
   "minimum_chrome_version": "116",
   "author": "Jonathan Kung",

@@ -27,11 +27,11 @@ Access can be revoked at any time from `chrome://extensions` → **Site access**
 
 ### Inbox Zero
 
-Every post is **read** or **unread**, and gets **Archive** and **Pin** buttons
-in its left margin, which appear when you hover the post and stay out while it
-is open. Comments and replies never get them — only the post itself can be filed
-or pinned. The margin they float in is taken out of the message list's own left
-edge, not added to it, so no post moves on screen. Archiving marks the post read
+Every post is **read** or **unread**, and gets an **Archive** button in its left
+margin, which appears when you hover the post and stays out while it is open.
+Comments and replies never get it — only the post itself can be filed. The margin
+it floats in is taken out of the message list's own left edge, not added to it,
+so no post moves on screen. Archiving marks the post read
 and takes it out of the channel view, just like moving a read email out of your
 inbox; a read post keeps only its **Unarchive** button, which marks it unread and
 brings it back.
@@ -52,7 +52,7 @@ brings it back.
   unread. Nothing is re-dressed, and the empty box Teams wrapped a filtered-out
   post in goes with it, so no violet edges or ghost rows are left behind. Read
   posts carry an **Unarchive** button showing a white archive box in a filled
-  purple circle, the same filled treatment a pinned post's pin gets.
+  purple circle.
 - A post you archive slides to the right and fades as it leaves the Inbox rather
   than vanishing, so the eye sees where it went. Unarchiving sends it the other
   way — left and out of sight — and the space it held closes up behind it.
@@ -95,9 +95,11 @@ behind the card, untouched.
 
 Hovering fills the card with Teams purple the way a filled button reads, and
 clicking it opens the post to its full height, handed straight back to Teams'
-own layout, replies and all; clicking it again folds it back. A channel that
-showed two posts now shows a dozen, which is the usual complaint about Teams'
-post list.
+own layout, replies and all. The same click makes the post the message Teams'
+own keyboard shortcuts act on, so they work straight away rather than after a
+second click; clicking the open post folds it back, and **Escape** does too. A
+channel that showed two posts now shows a dozen, which is the usual complaint
+about Teams' post list.
 
 Light and dark are both the card's own: white with dark type in light mode, a
 soft charcoal with near-white type in dark. The theme is read from the page — a
@@ -121,54 +123,42 @@ scroll box, so a bar placed inside it scrolls away the moment the Inbox opens on
 the newest post; anchored to the list's top edge it stays put, and the list
 reserves a matching padding so the first post is never covered.
 
-- Each pin is a purple bar reading `Author: subject` and the start of the post;
-  clicking it eases the channel to the post and flashes it, rather than cutting
-  straight to it, so the move is visible and the eye follows it.
-  The post is never moved, copied or re-parented, so replies, reactions, the
-  reply box, **see more** and every menu Teams portals out (emoji, formats,
-  attachments) are Teams' own and work exactly as they do in the stream.
+- Only posts a channel moderator has pinned **for everyone** get a bar. Teams++
+  adds no pin of its own: there is no Pin button on a post, no saved copy, and
+  nothing of ours to keep in step with Teams.
+- Each pin is a purple bar reading `Author: subject` and the start of the post.
+- Clicking a bar opens the post the way Teams does: it clicks the post's own item
+  in the **Pinned** accordion under "In this channel", so Teams brings the post
+  into the channel — loading older history if it has to — and focuses it. The
+  list then lines the post up with the top of the scroll area, so it reads from
+  its first line down. If the accordion is closed it is opened first; if the
+  sidebar is not on screen at all, the channel is searched the long way (below).
 - A pinned post stays in the channel where it was posted — the bar is a shortcut
-  to it, not a second copy of it — so unpinning only takes the bar away.
-- Pins belong to the channel they were made in. The bars show this channel's
-  pins only, and each channel keeps its own list in `chrome.storage.sync` under
-  its channel id — read from the whole route, path or hash, because the newest
-  Teams keeps the channel in the hash and every channel's path is the same — so
-  pinning in Biology 101 leaves Biology 202 with none. Pins filed under the old
-  shared key are adopted by the channel the user is in when the update runs.
-- Every pin keeps a copy of the post's words from the moment it is pinned. Teams
-  stops holding old posts, so when the search reaches the end of the channel's
-  history without finding one, the bar opens that copy in a read-only card
-  instead of an apology — a pin always has something to show.
-- A pinned post carries only its **Pin** button: Archive is off the rail until
-  it is unpinned, because a bar must never point at a post hidden in the
-  Archive.
+  to it, not a second copy of it.
+- The post is never moved or re-parented, so replies, reactions, the reply box,
+  **see more** and every menu Teams portals out (emoji, formats, attachments)
+  are Teams' own and work exactly as they do in the stream.
+- Bars belong to the channel they were read in: Teams lists a channel's pins per
+  channel, and nothing about them is stored by the extension.
+- A pinned post in the Inbox has no Archive button until it is unpinned, because
+  a bar must never point at a post hidden in the Archive. In the Archive the same
+  post is simply a filed post and can be unarchived.
 - Teams only keeps the posts it has rendered, so an old pin is often not in the
-  page at all. Clicking its bar walks the message list back through its history,
-  pushing at the top of the list to make Teams fetch each older batch, and waits
-  for the list to actually grow before moving on — so a post dozens of batches
-  back is still found, then scrolled to and flashed. A **Stop searching** button
-  sits at the bottom of the page while it runs, and stopping puts the channel
-  back where it was. If the post has gone from the channel entirely, the list is
-  restored and a message says so.
-- Each bar carries its own unpin button on its left, so a pin is taken down from
-  the bar in one click rather than by finding the post first.
-- Posts pinned for everyone by a channel moderator sit first, then the ones you
-  pinned yourself.
-- A pin belongs to the channel when Teams lists it in the **Pinned** accordion
-  under "In this channel". Such a pin gets no controls at all for a user Teams
-  does not let pin there; someone who may pin gets **Unpin for everyone**, which
-  uses Teams' own unpin control.
-- A pin whose post Teams has not loaded still shows its author and the words
-  kept with the pin, and clicking it starts the same walk back through the
-  channel.
+  page at all. When there is no sidebar item to hand to, clicking a bar walks the
+  message list back through its history, pushing at the top of the list to make
+  Teams fetch each older batch, and waits for the list to actually grow before  moving on — so a post dozens of batches back is still found, then opened. A
+  **Stop searching** button sits at the bottom of the page while it runs, and
+  stopping puts the channel back where it was.
+- Each bar carries its own unpin button on its left when Teams lets this user pin
+  in the channel; it uses Teams' own unpin control. Without that control the bar
+  has no button, since Teams would refuse the request.
+- A pin whose post has not loaded yet still shows its author and the post's
+  wording, and clicking it opens the same Teams item once the list catches up.
 - Multiple pins stack vertically; the stack scrolls if it gets tall.
-- Every post also has a **Pin** button — a filled white pin on Teams purple while
-  pinned, an outline while not — so anyone can keep a post at the top.
-- Status messages (archived, unarchived, pins) are a larger translucent card
-  centred on the post they are about, so the news appears where the change
-  happened. With no single post involved they sit in the middle of the list.
+- Status messages (archived, unarchived, pins) are a larger translucent card in
+  the middle of the posts, so an action always reports itself in the same place.
 
-All three features are independent switches in the popup. Archive state, pins and the
+All three features are independent switches in the popup. Archive state and the
 current view are stored in `chrome.storage.sync`, so they follow the user to every
 Chrome profile signed in with the same account.
 
@@ -186,7 +176,7 @@ changelog.html           Timeline of what changed in each version
 changelog.js             Links the changelog back to the welcome screen
 src/shared/features.js   Feature registry + sync-storage keys and helpers
 src/content/selectors.js DOM anchors (message rows, bodies, authors, pins)
-src/content/content.js   Archive/pin buttons, Inbox/Archive tabs, gaps, pinned bars
+src/content/content.js   Archive button, Inbox/Archive tabs, gaps, pinned bars
 src/content/teams.css    All injected UI, gated by data-tpp-* on <html>
 src/popup/               Popup markup, styling and access/switch logic
 icons/icon*.png          Extension icons — the files manifest.json points at
@@ -298,16 +288,15 @@ To list every anchor Teams exposes on a page, run this in DevTools:
 ## Known limits
 
 - Teams does not expose a public API for pinned posts. Moderator pins are detected
-  from the pin indicator on a post, and from Teams' pinned-messages pane while it is
-  open. If Teams renders neither, the post will not get a bar automatically; the Pin
-  button always works.
+  from the pin indicator on a post, and from Teams' own **Pinned** list under "In
+  this channel". If Teams renders neither, the post gets no bar — Teams++ does not
+  pin anything itself.
 - Reply counts are read from visible "N replies" text. A thread whose replies are only
   reachable through a separate pane may show zero, in which case a reply still
   un-archives it as soon as Teams shows a count.
-- Read/unread decisions and pins are capped (240 posts and 40 pins) and trimmed
-  if Chrome Sync's per-item quota is reached. The newest entries are kept, so a
-  channel with more than 240 posts unread at once would file the oldest of them
-  as read.
+- Read/unread decisions are capped (240 posts) and trimmed if Chrome Sync's
+  per-item quota is reached. The newest entries are kept, so a channel with more
+  than 240 posts unread at once would file the oldest of them as read.
 - Archived posts are hidden per channel by post id, not per Teams account. Because
   the data lives in Chrome Sync, a different signed-in Chrome profile sees the same
   archive only if Chrome Sync is enabled for the extension.

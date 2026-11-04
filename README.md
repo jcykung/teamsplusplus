@@ -69,9 +69,13 @@ channel is opened — Teams' idea of read is not the one this view follows. Open
 a post that has moved on since you last read it brings the markers back, so a
 reply, a reaction, a new attachment or an edit puts the card back in view.
 
-The popup's **Manually mark as read** switch turns that rule off. With it off the
-cards follow Teams' own read state instead: the **New** badge and purple border
-show while Teams marks the post new and clear when Teams marks it read.
+### Manually mark as read
+
+On by default. A post Teams marks **New** keeps its badge and purple border until
+you open its card — Teams clearing its badge when the channel opens does not
+count as reading it — so a channel says at a glance what has arrived. Turn the
+switch off and the cards follow Teams instead: the badge and purple border show
+while Teams marks the post new and clear when Teams marks it read.
 
 The Compact posts switch lives in the popup, and its setting is stored in
 `chrome.storage.sync`, so it follows the user to every Chrome profile signed in

@@ -814,8 +814,11 @@
 
     const names = new Set();
     for (const item of document.querySelectorAll(selector)) {
-      // A nested row carrying the same attribute is part of the outer one.
-      if (item.parentElement && item.parentElement.closest(selector)) continue;
+      // Teams nests its channel rows inside group rows (Favourites, and the
+      // sections below it) that carry the same role. The inner row is the
+      // channel and the outer one only holds them, so a row that contains
+      // another candidate is the group and is skipped.
+      if (item.querySelector(selector)) continue;
       const name = railNameOf(item);
       if (!name) continue;
       names.add(name);

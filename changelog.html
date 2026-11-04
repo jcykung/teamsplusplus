@@ -310,6 +310,9 @@
               <span class="badge-tag tag-improve">IMPROVE</span><strong>A purple dot for channels with news:</strong> A channel with unread posts stays bold in the left rail and now carries a purple dot to the left of its name, instead of turning the whole name purple — the same purple as a new post's card, without recolouring Teams' own text.
             </li>
             <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>The purple dot reaches the channel list:</strong> Teams' current rail gives its rows no <code>data-tid</code>, so the dot was never placed. Channel rows are found by their role instead, and the channels nested inside each group are read rather than the groups themselves.
+            </li>
+            <li class="change-item">
               <span class="badge-tag tag-fix">FIX</span><strong>Marking a post unread sticks:</strong> Choosing Teams' own <strong>Mark as unread</strong> used to be undone the moment you opened the card to reach the menu. A post marked unread now keeps its <strong>New</strong> badge and purple border until you open its card again.
             </li>
             <li class="change-item">

@@ -172,12 +172,18 @@
      * A channel row in Teams' left rail. Teams signals unread posts by bolding
      * the channel's name, and a computed font weight cannot be selected in CSS,
      * so paintChannelRail (content.js) reads the weight and marks the name.
+     *
+     * The current rail gives its rows no `data-tid` at all, so the role is what
+     * finds them: rows are treeitems, with the channel rows nested inside group
+     * treeitems. The last entry is the one that actually matches there — the
+     * data-tid entries are kept for builds that still print them.
      */
     channelItem: [
       '[data-tid="channel-list-item"]',
       '[data-tid*="channel-list-item" i]',
       '[data-tid*="channelListItem" i]',
-      '[role="treeitem"][data-tid*="channel" i]'
+      '[role="treeitem"][data-tid*="channel" i]',
+      '[role="treeitem"]'
     ],
 
     /** The name element inside a channel row, when Teams gives it a name. */

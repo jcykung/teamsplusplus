@@ -57,7 +57,7 @@
       id: 'manualRead',
       attr: 'data-tpp-manual-read',
       label: 'Manually mark as read',
-      hint: 'A post keeps Teams\' New badge and purple border until you open its card. Turn it off to follow Teams instead, where opening the channel marks posts read.',
+      hint: 'A post keeps Teams\' New badge and purple border until you click it. Turn it off to follow Teams instead, where opening the channel marks posts read.',
       default: true
     },
     {

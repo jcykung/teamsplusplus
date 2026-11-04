@@ -55,9 +55,9 @@ the moment Teams switches.
 
 The card carries Teams' own **New** badge beside the time, so a folded post says
 at a glance that it has arrived, and it wears a bright purple border instead of
-the usual hairline until it has been read. The same purple marks the channel's
-name in the left rail while Teams bolds it for unread activity, so the channel
-and its new posts read as one thing. Teams' **Last read** divider closes the last
+the usual hairline until it has been read. A channel with unread posts carries
+the same purple in the left rail: its name stays bold and a purple dot sits to
+the left of it, so the channel and its new posts read as one thing. Teams' **Last read** divider closes the last
 post you read, so the card copies Teams' own divider into the gap underneath that
 post and centres it between the two cards — same line, same wording, same
 spacing. Where Teams' divider is already on screen, the copy stands down rather

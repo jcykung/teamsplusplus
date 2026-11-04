@@ -794,14 +794,14 @@
   let channelRailAt = 0;
 
   /**
-   * Colours the channels Teams marks with unread activity.
+   * Marks the channels Teams gives unread activity.
    *
    * Teams bolds a channel's name in the left rail when it has news, and there is
    * no attribute to hang a CSS rule on: the weight is computed. So the bold name
-   * is found here and marked, and teams.css colours the mark. The mark is cleared
-   * the moment the name is no longer bold, so reading the channel takes the
-   * colour with it. Runs at most once a second: the rail only changes when Teams
-   * says a channel has news or the user reads one.
+   * is found here and marked, and teams.css draws a dot beside it. The mark is
+   * cleared the moment the name is no longer bold, so reading the channel takes
+   * the dot with it. Runs at most once a second: the rail only changes when
+   * Teams says a channel has news or the user reads one.
    */
   function paintChannelRail() {
     if (!features || !features.compactPosts) return;

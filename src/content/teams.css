@@ -665,13 +665,26 @@ html[data-tpp-compact-posts] .tpp-post .tpp-preview.tpp-preview-unread {
 }
 
 /*
- * The same purple marks a channel with news in the left rail. Teams shows that
- * state only as a bold font weight, so content.js reads the weight and sets the
- * mark (paintChannelRail); this colours it. The mark follows the weight, so the
- * colour goes when Teams counts the channel as read.
+ * A channel with news in the left rail stays bold and carries a purple dot to the
+ * left of its name. Teams shows that state only as a bold font weight, so
+ * content.js reads the weight and sets the mark (paintChannelRail); this draws
+ * it. The name keeps Teams' own colour — the dot is the cue, not a recoloured
+ * label — and the mark follows the weight, so the dot goes when Teams counts the
+ * channel as read.
  */
 html[data-tpp-compact-posts] [data-tpp-unread-name] {
-  color: var(--tpp-purple-user) !important;
+  font-weight: 600 !important;
+}
+
+html[data-tpp-compact-posts] [data-tpp-unread-name]::before {
+  content: "" !important;
+  display: inline-block !important;
+  width: 7px !important;
+  height: 7px !important;
+  margin-right: 6px !important;
+  border-radius: 50% !important;
+  background: var(--tpp-purple-user) !important;
+  vertical-align: middle !important;
 }
 
 /*

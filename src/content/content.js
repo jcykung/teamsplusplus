@@ -263,10 +263,10 @@
     if (open) unfolded.add(id);
     else unfolded.delete(id);
     row.classList.toggle('tpp-unfold', open);
-    // Clicking a post is the read action in this view, whether the click opens
-    // the card or closes it again: marking a post unread in Teams' own menu
-    // leaves it open, so a click that only folds it must read it too.
-    markPostOpened(row);
+    // Opening the card is what marks a post read in this view. Closing it again
+    // is not: a post closed without being read stays New, and a post marked
+    // unread in Teams' own menu reads when it is opened next.
+    if (open) markPostOpened(row);
     // Opening a post can put Teams' own divider back on screen, so which line
     // is shown is decided again at once — otherwise the copy stays beside it and
     // the post shows two. The row also changed height, so the line is re-measured.

@@ -63,25 +63,24 @@ post and centres it between the two cards — same line, same wording, same
 spacing. Where Teams' divider is already on screen, the copy stands down rather
 than double it.
 
-Clicking a post marks it read: opening its card, or clicking an open post to
-close it again. Until then it keeps its **New** badge and purple border, even
-after Teams clears its own badge when the channel is opened — Teams' idea of read
-is not the one this view follows. Opening a post that has moved on since you last
-read it brings the markers back, so a reply, a reaction, a new attachment or an
-edit puts the card back in view.
+Opening a card marks a post read. Closing it again does not, so a post closed
+without being read stays New. Until a card is opened it keeps its **New** badge
+and purple border, even after Teams clears its own badge when the channel is
+opened — Teams' idea of read is not the one this view follows. Opening a post
+that has moved on since you last read it brings the markers back, so a reply, a
+reaction, a new attachment or an edit puts the card back in view.
 
 ### Manually mark as read
 
 On by default. A post Teams marks **New** keeps its badge and purple border until
-you click it — Teams clearing its badge when the channel opens does not count as
-reading it — so a channel says at a glance what has arrived. Turn the
+you open its card — Teams clearing its badge when the channel opens does not
+count as reading it — so a channel says at a glance what has arrived. Turn the
 switch off and the cards follow Teams instead: the badge and purple border show
 while Teams marks the post new and clear when Teams marks it read.
 
 Marking a post unread from Teams' own menu brings the badge back the same way,
-and it stays until you click the post again — opening it to reach that menu is
-not what clears it, and the next click does, whether it opens the card or closes
-it.
+and it stays until you open the card again — opening it to reach that menu is
+not what clears it, and closing it again does not either.
 
 The Compact posts switch lives in the popup, and its setting is stored in
 `chrome.storage.sync`, so it follows the user to every Chrome profile signed in

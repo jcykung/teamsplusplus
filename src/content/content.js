@@ -673,6 +673,10 @@
    */
   function refreshNewPost(id, row) {
     if (!id || !features || !features.compactPosts || features.inboxZero) return false;
+    // With the switch off this view follows Teams: the badge and border show
+    // while Teams marks the post new and clear when Teams marks it read, and
+    // nothing is written down.
+    if (!features.manualRead) return isUnreadPost(row);
     const record = newState[id];
     if (record && record.n === 1) return true;
     if (!isUnreadPost(row)) return false;
@@ -696,6 +700,9 @@
   function markPostOpened(row) {
     const id = row && row.dataset.tppId;
     if (!id || !features || !features.compactPosts || features.inboxZero) return;
+    // Nothing is marked read by hand while the switch is off: Teams' badge is
+    // the only marker then, and opening a card must not hide it.
+    if (!features.manualRead) return;
     const fingerprint = activityOf(row);
     setNewRecord(id, fingerprint ? { f: fingerprint } : {});
     delete row.dataset.tppNew;

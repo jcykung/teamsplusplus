@@ -17,8 +17,9 @@
  *                           (only read posts shown)
  *   teamsPlusPlus.newPosts  post id -> { n: 1 } while the compact card is still
  *                           new, or { f } with the fingerprint captured when it
- *                           was opened. The only thing that marks a post read in
- *                           the compact view is opening its card.
+ *                           was opened. While the "Manually mark as read"
+ *                           switch is on, the only thing that marks a post read
+ *                           in the compact view is opening its card.
  */
 (function (root) {
   'use strict';
@@ -50,6 +51,13 @@
       attr: 'data-tpp-compact-posts',
       label: 'Compact posts',
       hint: 'Shows each post as a card: author, time, headline and two lines. Open one to see the rest.',
+      default: true
+    },
+    {
+      id: 'manualRead',
+      attr: 'data-tpp-manual-read',
+      label: 'Manually mark as read',
+      hint: 'A post keeps Teams\' New badge and purple border until you open its card. Turn it off to follow Teams instead, where opening the channel marks posts read.',
       default: true
     },
     {

@@ -154,6 +154,40 @@
     ],
 
     /**
+     * Teams' own "New" badge on a post, when it renders one. The folded card
+     * carries this so an unread post still says so while Teams' row is hidden.
+     */
+    newBadge: [
+      '[data-tid="new-message-badge"]',
+      '[data-tid*="new-message-status" i]'
+    ],
+
+    /**
+     * Teams' own "Last read" divider. It sits either inside the post below it
+     * or between the two posts; the folded card draws its own on that seam.
+     */
+    lastRead: ['[data-tid="last-read-line"]', '[data-tid*="last-read" i]'],
+
+    /**
+     * A channel row in Teams' left rail. Teams signals unread posts by bolding
+     * the channel's name, and a computed font weight cannot be selected in CSS,
+     * so paintChannelRail (content.js) reads the weight and marks the name.
+     */
+    channelItem: [
+      '[data-tid="channel-list-item"]',
+      '[data-tid*="channel-list-item" i]',
+      '[data-tid*="channelListItem" i]',
+      '[role="treeitem"][data-tid*="channel" i]'
+    ],
+
+    /** The name element inside a channel row, when Teams gives it a name. */
+    channelName: [
+      '[data-tid*="channel-name" i]',
+      '[data-tid*="channelName" i]',
+      '[data-tid*="channel-title" i]'
+    ],
+
+    /**
      * Ancestors that mean a row is a comment or a reply rather than a post.
      * Only posts get an Archive button, so matches here are skipped. Teams
      * prefixes comment markup with `comment-message-*`, which the second entry

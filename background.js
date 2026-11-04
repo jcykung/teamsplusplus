@@ -24,7 +24,7 @@ const TEAMS_ORIGINS = [
 ];
 const CONTENT_SCRIPT_ID = 'teamspp-content';
 /** Bumped with every change to the content script; see the refresh block below. */
-const CONTENT_VERSION = '1.0.0-2026-11-03.140';
+const CONTENT_VERSION = '1.0.0-2026-11-03.144';
 
 const { DEFAULTS, STORAGE_KEY, VIEW_KEY } = globalThis.TeamsPlusPlus;
 

@@ -53,9 +53,15 @@ painted behind the posts, with the desktop setting only as a last resort — so 
 card matches Teams even when the desktop is set the other way, and it repaints
 the moment Teams switches.
 
-The card drops Teams' own **New** badge and **Last read** line, so a folded post
-is just name, time, headline and two lines. Opening the post hands it back to
-Teams, where both are shown as usual.
+The card carries Teams' own **New** badge beside the time, so a folded post says
+at a glance that it has arrived, and it wears a bright purple border instead of
+the usual hairline until it has been read. The same purple marks the channel's
+name in the left rail while Teams bolds it for unread activity, so the channel
+and its new posts read as one thing. Teams' **Last read** divider closes the last
+post you read, so the card copies Teams' own divider into the gap underneath that
+post and centres it between the two cards — same line, same wording, same
+spacing. Where Teams' divider is already on screen, the copy stands down rather
+than double it.
 
 The switch lives in the popup and writes one synced preference, so it applies to
 every Teams tab and every signed-in Chrome profile.
@@ -154,5 +160,3 @@ To list every anchor Teams exposes on a page, run this in DevTools:
 - A card is built from the post Teams has rendered. A post Teams has not mounted
   yet gets its card when it does, so a channel that is still loading fills in
   from the top as the posts arrive.
-- Teams' own **New** badge and **Last read** line are dropped from folded cards;
-  opening a post hands it back to Teams, where both are shown as usual.

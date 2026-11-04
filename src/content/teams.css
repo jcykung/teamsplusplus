@@ -656,6 +656,25 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-preview {
 }
 
 /*
+ * A new post's card is edged in bright purple instead of the usual hairline, so
+ * what has arrived stands apart from what has been read at a glance. The hover
+ * state still fills the card, and the edge goes with the fill.
+ */
+html[data-tpp-compact-posts] .tpp-post .tpp-preview.tpp-preview-unread {
+  border-color: var(--tpp-purple-user) !important;
+}
+
+/*
+ * The same purple marks a channel with news in the left rail. Teams shows that
+ * state only as a bold font weight, so content.js reads the weight and sets the
+ * mark (paintChannelRail); this colours it. The mark follows the weight, so the
+ * colour goes when Teams counts the channel as read.
+ */
+html[data-tpp-compact-posts] [data-tpp-unread-name] {
+  color: var(--tpp-purple-user) !important;
+}
+
+/*
  * With the card on show the post underneath takes no room: every branch of the
  * row except our own controls is hidden, so the card is the post. Teams' markup
  * is untouched, and comes straight back when the row is unfolded.
@@ -721,6 +740,28 @@ html[data-tpp-compact-posts] .tpp-post.tpp-previewed:not(.tpp-unfold) > *:not([d
   opacity: 0.6;
 }
 
+/*
+ * Teams' unread badge, carried by the card instead of the row it hides. It is
+ * set after the time so a folded post still says, at a glance, that it is new.
+ */
+.tpp-preview-new {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--tpp-purple-user);
+  color: #fff;
+  font: 800 9.5px/1.5 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-preview:hover .tpp-preview-new {
+  background: #fff;
+  color: var(--tpp-purple);
+}
+
 /* The headline: the one thing that has to carry the post at a glance. */
 .tpp-preview-subject {
   display: -webkit-box !important;
@@ -776,6 +817,66 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-preview:hover .tpp-
   color: #ffffff;
   opacity: 1;
   transform: translateX(2px);
+}
+
+/*
+ * Teams' "Last read" divider closes the last-read post, and that is where the
+ * folded card keeps it: paintLastRead copies Teams' own divider element in, so
+ * the line, the word and the spacing are Teams' own. It takes no room in the
+ * row: it hangs in the gap below the post, and placeLastRead (content.js) puts
+ * it halfway between this post and the next, so it reads as centred between
+ * them rather than leaning on the one above.
+ */
+.tpp-last-read {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--tpp-text-muted);
+}
+
+/* Folded or open: the line marks the boundary either way, so it never blinks off. */
+html[data-tpp-compact-posts] .tpp-post.tpp-previewed .tpp-last-read {
+  display: flex !important;
+}
+
+/*
+ * A line needs air. The post that closes the read section gives back a band under
+ * the card, and placeLastRead centres the line in that roomier gap — so it sits
+ * clear of both posts rather than touching one of their edges.
+ */
+html[data-tpp-compact-posts] .tpp-post.tpp-last-read-row {
+  padding-bottom: 26px !important;
+}
+
+/* Teams' divider, copied: it keeps its own classes, it just fills the space. */
+.tpp-last-read-native {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 100% !important;
+  margin: 0 !important;
+}
+
+/* The fallback shape, used only when there is no Teams divider to copy. */
+.tpp-last-read-line {
+  flex: 1 1 0;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.35;
+}
+
+.tpp-last-read-label {
+  flex: none;
+  font: 400 12px/1.4 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 /* Keyboard users get the same card, outlined in the same purple. */

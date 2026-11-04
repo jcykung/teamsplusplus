@@ -88,7 +88,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-03.140';
+  const BUILD = '2026-11-03.144';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -253,6 +253,10 @@
     if (open) unfolded.add(id);
     else unfolded.delete(id);
     row.classList.toggle('tpp-unfold', open);
+    // Opening a post can put Teams' own divider back on screen, so which line
+    // is shown is decided again at once — otherwise the copy stays beside it and
+    // the post shows two. The row also changed height, so the line is re-measured.
+    refreshLastRead();
     // An opened post takes the keyboard the way a message does when Teams is
     // clicked on it: the card that opened it is not a message, so focus is put
     // on the post itself.
@@ -547,11 +551,30 @@
     const time = timeEl ? collapse(timeEl.textContent || '') : '';
     const raw = body ? String(body.textContent || '').replace(/\r/g, '') : '';
 
-    // A card already drawn is left alone unless the post's author, time or
-    // words changed. Everything below reads and rewrites the card, and this
-    // runs for every post on every scan: comparing a short fingerprint first is
-    // what keeps a Teams re-render from costing a full repaint of the list.
-    const signature = [row.dataset.tppId, author, time, raw.length, raw.slice(0, 24)].join('|');
+    // Teams' own read markers live in the part of the row the card hides, so
+    // the card carries them. With Inbox Zero on, the Inbox and Archive tabs are
+    // the marker instead, and these would contradict them.
+    const unread = !features.inboxZero && isUnreadPost(row);
+    const lastRead = !features.inboxZero && endsLastRead(row);
+
+    // A card already drawn is left alone unless the post's author, time, words
+    // or read markers changed. Everything below reads and rewrites the card,
+    // and this runs for every post on every scan: comparing a short fingerprint
+    // first is what keeps a Teams re-render from costing a full repaint of the
+    // list.
+    const signature = [
+      row.dataset.tppId,
+      author,
+      time,
+      raw.length,
+      raw.slice(0, 24),
+      unread ? 'new' : '',
+      lastRead ? 'seam' : ''
+    ].join('|');
+    // A new post reads as new on the card itself: a bright purple edge rather
+    // than the usual hairline. Written before the "nothing changed" return so a
+    // card painted by an older build is corrected on the next paint too.
+    if (card) card.classList.toggle('tpp-preview-unread', unread);
     if (card && row.dataset.tppCardOf === signature) {
       if (!row.classList.contains('tpp-previewed')) row.classList.add('tpp-previewed');
       return;
@@ -572,6 +595,7 @@
         '<span class="tpp-preview-meta">' +
         '<span class="tpp-preview-name"></span>' +
         '<span class="tpp-preview-time"></span>' +
+        '<span class="tpp-preview-new" hidden>New</span>' +
         '</span>' +
         '<span class="tpp-preview-subject"></span>' +
         '<span class="tpp-preview-snippet"></span>' +
@@ -593,6 +617,7 @@
       row.append(card);
     }
 
+    card.classList.toggle('tpp-preview-unread', unread);
     card.dataset.tppSig = signature;
     row.dataset.tppCardOf = signature;
     const slot = card.querySelector('.tpp-preview-avatar');
@@ -615,7 +640,338 @@
     const snippetSlot = card.querySelector('.tpp-preview-snippet');
     snippetSlot.textContent = snippet;
     snippetSlot.hidden = !snippet;
+    card.querySelector('.tpp-preview-new').hidden = !unread;
+    paintLastRead(row, lastRead);
     row.classList.add('tpp-previewed');
+  }
+
+  /** Whether Teams marks this post as unread. */
+  function isUnreadPost(row) {
+    return Boolean(first(S.newBadge, row));
+  }
+
+  /** Channel rows already resolved to their name element, so the DOM is walked once. */
+  const railNameCache = new WeakMap();
+  /** When the rail was last read (see paintChannelRail). */
+  let channelRailAt = 0;
+
+  /**
+   * Colours the channels Teams marks with unread activity.
+   *
+   * Teams bolds a channel's name in the left rail when it has news, and there is
+   * no attribute to hang a CSS rule on: the weight is computed. So the bold name
+   * is found here and marked, and teams.css colours the mark. The mark is cleared
+   * the moment the name is no longer bold, so reading the channel takes the
+   * colour with it. Runs at most once a second: the rail only changes when Teams
+   * says a channel has news or the user reads one.
+   */
+  function paintChannelRail() {
+    if (!features || !features.compactPosts) return;
+    const now = Date.now();
+    if (now - channelRailAt < 1000) return;
+    channelRailAt = now;
+
+    const selector = (S.channelItem || []).join(',');
+    if (!selector) return;
+
+    const names = new Set();
+    for (const item of document.querySelectorAll(selector)) {
+      // A nested row carrying the same attribute is part of the outer one.
+      if (item.parentElement && item.parentElement.closest(selector)) continue;
+      const name = railNameOf(item);
+      if (!name) continue;
+      names.add(name);
+      if (isBold(name)) {
+        if (name.dataset.tppUnreadName !== '1') name.dataset.tppUnreadName = '1';
+      } else if (name.dataset.tppUnreadName !== undefined) {
+        delete name.dataset.tppUnreadName;
+      }
+    }
+
+    // A row Teams has replaced leaves its mark on a detached node; this is the
+    // cheap way to keep the page free of them.
+    for (const el of document.querySelectorAll('[data-tpp-unread-name]')) {
+      if (!names.has(el)) delete el.dataset.tppUnreadName;
+    }
+  }
+
+  /** The element that carries a channel row's name, remembered per row. */
+  function railNameOf(item) {
+    const cached = railNameCache.get(item);
+    if (cached && cached.isConnected && item.contains(cached)) return cached;
+
+    let name = first(S.channelName, item);
+    if (name && !hasLetters(name.textContent)) name = null;
+    if (!name) {
+      // No name anchor: the first short piece of text in the row is the name.
+      // Badges and counts are rejected by the letters test.
+      let looked = 0;
+      for (const el of item.querySelectorAll('span, div, p, a')) {
+        if (looked++ > 14) break;
+        if (el.children.length || !hasLetters(el.textContent)) continue;
+        name = el;
+        break;
+      }
+    }
+    if (name) railNameCache.set(item, name);
+    return name || null;
+  }
+
+  function hasLetters(text) {
+    return /[A-Za-z]/.test(collapse(text || ''));
+  }
+
+  /** Whether the page draws this element bold — Teams' unread channel cue. */
+  function isBold(el) {
+    try {
+      const weight = getComputedStyle(el).fontWeight;
+      if (weight === 'bold') return true;
+      const numeric = Number(weight);
+      return Number.isFinite(numeric) && numeric >= 600;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * Whether Teams' "Last read" divider closes this post — that is, whether this
+   * is the last post that has been read. Teams ends the divider where the read
+   * section ends, and where that element is rendered varies by build: inside the
+   * last-read post, as its own element between two posts, or at the top of the
+   * first unread one. All three mean the same boundary, and all three put the
+   * line under the post above it — which is what this answers.
+   */
+  function endsLastRead(row) {
+    try {
+      const inside = first(S.lastRead, row);
+      if (inside) {
+        const head = row.querySelector('.tpp-head');
+        // Below the post's header it is this post's own footer. Above it, it is
+        // the line between the two posts, so it belongs to the one before.
+        if (!head) return true;
+        const aboveHead = Boolean(
+          inside.compareDocumentPosition(head) & Node.DOCUMENT_POSITION_FOLLOWING
+        );
+        if (!aboveHead) return true;
+      }
+
+      // The next post, and any divider rendered between the two of them.
+      const selector = (S.lastRead || []).join(',');
+      let next = row.nextElementSibling;
+      while (next) {
+        if (next.matches(selector) || next.querySelector(selector)) {
+          return true;
+        }
+        const post = next.classList.contains('tpp-post')
+          ? next
+          : next.querySelector('.tpp-post');
+        if (post) {
+          const inPost = first(S.lastRead, post);
+          const postHead = post.querySelector('.tpp-head');
+          return Boolean(
+            inPost &&
+              postHead &&
+              inPost.compareDocumentPosition(postHead) & Node.DOCUMENT_POSITION_FOLLOWING
+          );
+        }
+        next = next.nextElementSibling;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** Teams' own "Last read" divider for this post, wherever the build puts it. */
+  function nativeLastRead(row) {
+    const inside = first(S.lastRead, row);
+    if (inside) return inside;
+
+    const selector = (S.lastRead || []).join(',');
+    let next = row.nextElementSibling;
+    while (next) {
+      if (next.matches(selector)) return next;
+      const found = next.querySelector(selector);
+      if (found) return found;
+      if (next.classList.contains('tpp-post') || next.querySelector('.tpp-post')) return null;
+      next = next.nextElementSibling;
+    }
+    return null;
+  }
+
+  /**
+   * Re-decides the "Last read" line on every post: Teams' own line may have just
+   * appeared (or vanished) with a post being opened, and the copy follows it.
+   */
+  function refreshLastRead() {
+    for (const row of document.querySelectorAll('.tpp-post')) {
+      paintLastRead(row, endsLastRead(row));
+    }
+    syncLastReadBands();
+  }
+
+  /**
+   * Takes the band off any row that no longer carries the line. A stale band is
+   * 26px of empty space of its own, which is how opening and closing a post could
+   * leave the gap above it wider than it was.
+   */
+  function syncLastReadBands() {
+    for (const row of document.querySelectorAll('.tpp-last-read-row')) {
+      if (!row.querySelector(':scope > [data-tpp-ui="last-read"]')) {
+        row.classList.remove('tpp-last-read-row');
+      }
+    }
+  }
+
+  /** Whether an element is actually painted: a hidden one has no boxes. */
+  function hasBox(el) {
+    try {
+      return el.getClientRects().length > 0 && el.getBoundingClientRect().height > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * Puts the "Last read" line in the middle of the gap under the post it closes,
+   * measuring from the visible edges of the two posts rather than from the boxes
+   * around them, whose padding would pull the line off centre.
+   */
+  function placeLastRead() {
+    for (const seam of document.querySelectorAll('.tpp-last-read')) {
+      const row = seam.closest('.tpp-post');
+      if (!row) continue;
+
+      // The box the user sees: the card while the post is folded, the post itself
+      // once it is open.
+      const card = row.querySelector(':scope > [data-tpp-ui="preview"]');
+      const open = row.classList.contains('tpp-unfold');
+      const shown = card && !open ? card : row;
+      const rowRect = row.getBoundingClientRect();
+      const box = shown.getBoundingClientRect();
+      if (!box.height) continue;
+
+      // The band under the post belongs to the line, not to the post: measuring
+      // an open row to its padded bottom would put the gap above the line and
+      // drop the line onto the post below.
+      const banded = row.classList.contains('tpp-last-read-row');
+      const band = open && banded ? parseFloat(getComputedStyle(row).paddingBottom) || 0 : 0;
+      const bottom = box.bottom - band;
+
+      let next = row.nextElementSibling;
+      let nextBox = null;
+      while (next) {
+        const post = next.classList.contains('tpp-post')
+          ? next
+          : next.querySelector('.tpp-post');
+        if (post) {
+          // The same box the user sees: a folded post is its card. Its row keeps
+          // padding above the card, and measuring that would pull the line up.
+          const nextCard = post.querySelector('[data-tpp-ui="preview"]');
+          const nextShown =
+            nextCard && !post.classList.contains('tpp-unfold') ? nextCard : post;
+          nextBox = nextShown.getBoundingClientRect();
+          break;
+        }
+        next = next.nextElementSibling;
+      }
+
+      // The middle of the space the user sees: under the last-read post's card
+      // and over the next post's card.
+      const target = nextBox ? (bottom + nextBox.top) / 2 : bottom + 18;
+      const floor = bottom - rowRect.top + 2;
+
+      // The line is measured where it is drawn and moved by the difference, so
+      // any offset between its box and the line inside it (a copied divider with
+      // margins, a clipped one) is taken out instead of assumed away.
+      const drawn = seam.getBoundingClientRect();
+      const top = drawn.height
+        ? (parseFloat(seam.style.top) || 0) + (target - (drawn.top + drawn.height / 2))
+        : bottom - rowRect.top + Math.max((nextBox ? nextBox.top - bottom : 16) / 2, 2) - seam.offsetHeight / 2;
+
+      // Only when it moves: writing the same value on every scan is a mutation,
+      // and a mutation on our own node is what a scan loop feeds on.
+      const nextTop = `${Math.round(Math.max(top, floor))}px`;
+      if (seam.style.top !== nextTop) seam.style.top = nextTop;
+    }
+  }
+
+  /**
+   * Teams' "Last read" divider closes the last-read post, so the folded card
+   * carries a copy of Teams' own divider underneath itself — the line, the word
+   * and the spacing are Teams' own, in Teams' own place and in either theme. It
+   * sits in the row's own flow after the card, so it takes its line and nothing
+   * more: no reserved band, and so no gap over the first unread post.
+   */
+  function paintLastRead(row, wanted) {
+    let seam = row.querySelector(':scope > [data-tpp-ui="last-read"]');
+
+    // Inbox Zero replaces both read markers with its own tabs, so nothing is
+    // drawn then — the gate that also keeps a revived feature from doubling up.
+    if (features && features.inboxZero) {
+      seam?.remove();
+      row.classList.remove('tpp-last-read-row');
+      return;
+    }
+
+    const native = wanted ? nativeLastRead(row) : null;
+    // Teams' own line, when it is really painted on the page, is the one to
+    // show: a copy would double it. A divider the fold covers has no boxes at
+    // all, so it is not on screen and the copy is drawn instead. Deciding this by
+    // drawing rather than by where the element sits is what keeps a hidden
+    // divider from leaving the condensed view with no line at all.
+    const shownByTeams = Boolean(native) && hasBox(native);
+    // No card, no line: a row the fold could not draw is not a post to mark, and
+    // the band would show up as a gap on its own.
+    const carded = Boolean(row.querySelector(':scope > [data-tpp-ui="preview"]'));
+
+    if (!wanted || shownByTeams || !carded) {
+      seam?.remove();
+      row.classList.remove('tpp-last-read-row');
+      return;
+    }
+    // The row gives the line a small band of its own, so it is not crammed into
+    // the gap Teams leaves between posts.
+    row.classList.add('tpp-last-read-row');
+    if (seam) return;
+
+    seam = document.createElement('div');
+    seam.className = 'tpp-last-read';
+    seam.dataset.tppUi = 'last-read';
+    seam.setAttribute('aria-hidden', 'true');
+    // In pixels from the start: placeLastRead reads this back to correct itself.
+    seam.style.top = '0px';
+
+    if (native) {
+      const copy = native.cloneNode(true);
+      copy.removeAttribute('id');
+      copy.removeAttribute('role');
+      copy.removeAttribute('aria-labelledby');
+      copy.removeAttribute('data-tid');
+      copy.classList.remove('tpp-detail');
+      copy.classList.add('tpp-last-read-native');
+      for (const el of copy.querySelectorAll('[id]')) el.removeAttribute('id');
+      // Nothing in the copy may look like Teams' divider again, or the next scan
+      // would take our own copy for the real thing and skip drawing.
+      for (const el of copy.querySelectorAll('[data-tid]')) el.removeAttribute('data-tid');
+      seam.append(copy);
+    } else {
+      // Nothing to copy (a build that draws the divider elsewhere): the same
+      // line-and-label shape, in the page's own colours.
+      seam.innerHTML =
+        '<span class="tpp-last-read-line"></span>' +
+        '<span class="tpp-last-read-label">Last read</span>' +
+        '<span class="tpp-last-read-line"></span>';
+    }
+    // After the card, not before it: the line ends the last-read post.
+    row.append(seam);
+
+    // One boundary, one line: a copy left on a recycled or duplicated row goes.
+    for (const other of (findMessageList() || document).querySelectorAll(
+      '[data-tpp-ui="last-read"]'
+    )) {
+      if (other !== seam) other.remove();
+    }
   }
 
   /**
@@ -1414,6 +1770,8 @@
     }
 
     rowsById = next;
+    syncLastReadBands();
+    placeLastRead();
     applyViewFiltering();
   }
 
@@ -1619,7 +1977,7 @@
 
   /** Takes our own controls and marks off a row that is no longer a post. */
   function clearPostUi(row) {
-    row.classList.remove('tpp-post', 'tpp-unfold', 'tpp-previewed', 'tpp-ready');
+    row.classList.remove('tpp-post', 'tpp-unfold', 'tpp-previewed', 'tpp-ready', 'tpp-last-read-row');
     delete row.dataset.tppPainted;
     delete row.dataset.tppCardOf;
     delete row.dataset.tppTs;
@@ -2723,6 +3081,10 @@
 
       listRect = list.getBoundingClientRect();
 
+      // The line sits in the gap between two posts, so it is re-measured with
+      // everything else that is placed against the list.
+      placeLastRead();
+
       const empty = document.getElementById(EMPTY_ID);
       if (empty) anchor(empty, list, { top: 18, full: true, matchHeight: true });
 
@@ -3098,6 +3460,10 @@
 
   function scanNow() {
     if (!ready) return;
+
+    // The rail is read on every scan, wherever Teams is: a channel can have news
+    // while a chat is open. paintChannelRail throttles itself to once a second.
+    paintChannelRail();
 
     // A scan answers the change that asked for it, so both timers are settled.
     clearTimeout(rescanTimer);

@@ -294,13 +294,53 @@
       <div class="subtitle">What's new and improved in Teams++</div>
 
       <ul class="timeline">
-        <!-- v0.6.5 -->
+        <!-- v1.0 -->
         <li class="timeline-item latest">
+          <div class="timeline-marker"></div>
+          <div class="timeline-header">
+            <h2 class="version-title">v1.0</h2>
+            <span class="version-date">November 2026</span>
+            <span class="badge badge-latest">Current</span>
+          </div>
+          <ul class="change-list">
+            <li class="change-item">
+              <span class="badge-tag tag-new">NEW</span><strong>Compact posts, ready for prime time:</strong> The first stable release. Every channel post is drawn as a compact card — author, time, headline and two lines — and opens to the full post, replies and all, with a click or <strong>Escape</strong>.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>Inbox Zero is taking a break:</strong> The Inbox/Archive feature and its confetti are switched off for this release while they get more work. They are still in the build, but no switch turns them on and they do not change the post list.
+            </li>
+          </ul>
+        </li>
+
+        <!-- v0.6.6 -->
+        <li class="timeline-item">
+          <div class="timeline-marker"></div>
+          <div class="timeline-header">
+            <h2 class="version-title">v0.6.6</h2>
+            <span class="version-date">November 2026</span>
+          </div>
+          <ul class="change-list">
+            <li class="change-item">
+              <span class="badge-tag tag-improve">REMOVED</span><strong>Pinned bars are gone:</strong> Teams does not put a channel's pinned list anywhere the extension can read without opening the <strong>In this channel</strong> pane, so the purple bars could only ever be empty or out of date. Inbox Zero, the Archive and Compact posts are unchanged.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>New in Teams means Inbox in Teams++:</strong> A post Teams marks <strong>New</strong> now goes to the Inbox however old it is, and stays there until you archive it — the badge is written down the first time it is seen, so Teams clearing it on open no longer files the post behind your back. Archiving a post while the badge is still showing records that badge, so it does not bounce straight back; a later reply, reaction, attachment or edit still returns it to the Inbox.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>Archived posts come back when they move on:</strong> A new reply, a reaction, a new attachment or an edit to a post you filed sends it straight back to the Inbox. Teams++ fingerprints the post when it is archived — its reply count, reactions, attachments and words — and compares that on every scan, so nothing new stays buried in the Archive.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>Replies are reachable again:</strong> Inbox Zero was treating the collapsed reply box under each post as a loading placeholder — Teams gives it a placeholder id — and hiding it took the <strong>Reply</strong> control away. Loading stand-ins are still hidden, but nothing you write in is.
+            </li>
+          </ul>
+        </li>
+
+        <!-- v0.6.5 -->
+        <li class="timeline-item">
           <div class="timeline-marker"></div>
           <div class="timeline-header">
             <h2 class="version-title">v0.6.5</h2>
             <span class="version-date">November 2026</span>
-            <span class="badge badge-latest">Current</span>
           </div>
           <ul class="change-list">
             <li class="change-item">

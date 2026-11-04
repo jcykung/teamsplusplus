@@ -140,7 +140,11 @@
 
   function save() {
     const next = {};
-    for (const [id, input] of inputs) next[id] = input.checked;
+    // Disabled features have no switch and are always written off, so a stale
+    // `true` in this profile cannot come back with the rest of the settings.
+    for (const feature of FEATURES) {
+      next[feature.id] = feature.disabled ? false : inputs.get(feature.id)?.checked === true;
+    }
 
     chrome.storage.sync.set({ [STORAGE_KEY]: next }, () => {
       if (chrome.runtime.lastError) {
@@ -193,10 +197,9 @@
     });
   }
 
-  // Locked features are part of the extension rather than a preference: the
-  // pin bars have no switch, so no row is drawn for them.
   for (const feature of FEATURES) {
-    if (feature.locked) continue;
+    // A disabled feature is not a preference: it gets no row in the popup.
+    if (feature.disabled) continue;
     list.append(renderRow(feature));
   }
 

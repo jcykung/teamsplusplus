@@ -48,11 +48,13 @@
       '[data-tid*="skeleton" i]',
       '[data-tid*="loading" i]',
       '[data-tid*="placeholder" i]',
+      '[data-tid*="shimmer" i]',
       '[data-tid*="spinner" i]',
       '[data-tid*="progress" i]',
       '[aria-label*="loading" i]',
       '[role="progressbar"]',
       '[class*="skeleton" i]',
+      '[class*="shimmer" i]',
       '[class*="spinner" i]'
     ],
 
@@ -74,7 +76,7 @@
       '[id^="content-"]'
     ],
 
-    /** Author name, shown before the preview in a pinned bar. */
+    /** Author name, shown on a folded post's card. */
     messageAuthor: [
       '[id^="author-"]',
       '[data-tid="post-message-author"]',
@@ -125,8 +127,35 @@
     ],
 
     /**
+     * The "N replies" text on a post. A thread's count is printed on the post
+     * itself, so an archived post whose thread has grown can be spotted without
+     * its replies being rendered (replyCountOf in content.js).
+     */
+    replyCount: [
+      '[data-tid*="reply-count" i]',
+      '[data-tid*="replies-count" i]',
+      '[data-tid*="reply-summary" i]',
+      '[data-tid*="replies" i]',
+      '[aria-label*="replies" i]',
+      '[data-tid*="message-footer" i]',
+      '[data-tid*="post-footer" i]'
+    ],
+
+    /**
+     * Teams' own "New" badge on a post — the unread flag the user already reads
+     * in Teams. Inbox Zero honours it beside the install clock (newMarkerOf in
+     * content.js), so a post Teams marks goes to the Inbox and is kept there.
+     */
+    unreadMarker: [
+      '[data-tid="new-message-badge"]',
+      '[data-tid*="new-message-status" i]',
+      '[data-tid*="unread" i]',
+      '[aria-label*="unread" i]'
+    ],
+
+    /**
      * Ancestors that mean a row is a comment or a reply rather than a post.
-     * Only posts get archive/pin buttons, so matches here are skipped. Teams
+     * Only posts get an Archive button, so matches here are skipped. Teams
      * prefixes comment markup with `comment-message-*`, which the second entry
      * catches; the generic `comment` one covers the rest of its variants.
      */
@@ -138,7 +167,7 @@
       '[aria-label*="replies" i][role="list"]'
     ],
 
-    /** Teams' own "Post in channel" box; the pinned bars sit just above it. */
+    /** Teams' own "Post in channel" box. */
     newPostBox: [
       '[data-tid="post-compose-collapsed"]',
       '[data-tid="post-compose-collapsed-renderer"]',
@@ -153,39 +182,6 @@
       '[placeholder*="Post in channel" i]'
     ],
 
-    /**
-     * Teams' own list of pinned posts: the "Pinned" accordion in the "In this
-     * channel" sidebar, or a pinned-messages pane. A post listed here is pinned
-     * for the whole channel (a moderator's pin), which is what makes its bar
-     * unpinnable for a regular user.
-     */
-    pinnedPane: [
-      '[data-tid="channel-info-pane-pinned-posts-list"]',
-      '[aria-label="Pinned post list" i]',
-      '[data-tid="pinned-messages-pane"]',
-      '[data-tid="channel-pane-pinned-messages"]',
-      '[data-tid="chat-pane-pinned-messages"]',
-      '[aria-label*="Pinned messages" i][role="region"]',
-      '[aria-label*="Pinned messages" i][role="dialog"]'
-    ],
-
-    /** A marker inside a post row that means Teams itself has pinned it. */
-    nativePin: [
-      '[data-tid="pinned-message"]',
-      '[data-tid="message-pinned"]',
-      '[data-tid*="pinned" i]',
-      '[data-tid="pin"]',
-      '[data-tid*="pin-indicator" i]',
-      '[aria-label*="pinned" i]',
-      '[title*="pinned" i]'
-    ],
-
-    /** Teams' own "unpin" control inside a post, when it is rendered. */
-    unpinControl: [
-      '[data-tid*="unpin" i]',
-      '[aria-label*="unpin" i]',
-      '[title*="unpin" i]'
-    ]
   };
 
   root.TeamsPlusPlusSelectors = SELECTORS;

@@ -82,7 +82,7 @@ html[data-tpp-theme="dark"] {
 /*
  * Hidden means hidden, including our own rail: a post left open is marked
  * tpp-unfold, whose rule turns the buttons back to visible, so a filtered-out
- * post would otherwise leave a lone Archive/Pin pair floating in its space.
+ * post would otherwise leave a lone Archive button floating in its space.
  */
 html[data-tpp-inbox-zero][data-tpp-view="inbox"]
   .tpp-post[data-tpp-tag="read"]
@@ -107,8 +107,6 @@ html[data-tpp-inbox-zero] .tpp-post[data-tpp-tucked] {
   border: 0 !important;
   overflow: hidden !important;
   visibility: hidden !important;
-  /* The box keeps its place in Teams' arithmetic, the contents stop existing. */
-  content-visibility: hidden !important;
 }
 
 /*
@@ -120,8 +118,14 @@ html[data-tpp-inbox-zero] .tpp-post[data-tpp-tucked] {
  * attachment from the Archive was painted into the Inbox. Nothing inside a
  * tucked post is drawn at all, so switching tabs can never leave a piece of the
  * other tab behind.
+ *
+ * The children are what is hidden, not every descendant: a `display: none` box
+ * is skipped whole by the engine, so its subtree costs nothing on the style pass
+ * that this script's own attribute writes trigger several times a second. The
+ * universal descendant form had to visit every element inside every tucked post
+ * in the channel, which is the largest thing this stylesheet asked for.
  */
-html[data-tpp-inbox-zero] .tpp-post[data-tpp-tucked] * {
+html[data-tpp-inbox-zero] .tpp-post[data-tpp-tucked] > * {
   display: none !important;
 }
 
@@ -209,7 +213,7 @@ html[data-tpp-inbox-zero][data-tpp-view="archives"]:not([data-tpp-has-archives])
 
 /*
  * A hidden list still lets a child ask to be seen: the rail sets `visibility:
- * visible` when its post is open, which paints a lone Archive/Pin pair over the
+ * visible` when its post is open, which paints a lone Archive button over the
  * middle of an empty Archive. Our own chrome follows the list out of sight.
  */
 html[data-tpp-inbox-zero][data-tpp-view="archives"]:not([data-tpp-has-archives])
@@ -232,8 +236,22 @@ html[data-tpp-inbox-zero][data-tpp-view="archives"]:not([data-tpp-has-archives])
  * made the list taller, shortened the scrollbar, and then vanished again when the
  * batch arrived already closed up. That is the scrollbar that kept jumping, and
  * the spinner that appeared when a pull at the bottom asked for more posts.
+ *
+ * Only names that mean a stand-in are matched. A bare "placeholder" or
+ * "loading" is also what Teams calls the collapsed reply box under a post, and
+ * hiding those took the Reply control away from every post while Inbox Zero was
+ * on. A stand-in the scan finds is still hidden through data-tpp-placeholder,
+ * which never lands on anything the user writes in (markLoadingRows in
+ * content.js).
  */
-html[data-tpp-inbox-zero] [data-tpp-placeholder] {
+html[data-tpp-inbox-zero] [data-tpp-placeholder],
+html[data-tpp-inbox-zero] [class*="Skeleton" i],
+html[data-tpp-inbox-zero] [class*="SkeletonItem" i],
+html[data-tpp-inbox-zero] [class*="fui-Skeleton" i],
+html[data-tpp-inbox-zero] [class*="shimmer" i],
+html[data-tpp-inbox-zero] [data-tid*="skeleton" i],
+html[data-tpp-inbox-zero] [data-tid*="shimmer" i],
+html[data-tpp-inbox-zero] [role="progressbar"] {
   display: none !important;
 }
 
@@ -414,15 +432,15 @@ html[data-tpp-compact-posts]
 }
 
 /*
- * An archived post's button carries the same treatment as a pinned post's pin:
- * a white box in a filled purple circle. That is the post's status, and it is
- * also the control that puts the post back in the Inbox.
+ * An archived post's button reads as archived at a glance: a white box in a
+ * filled purple circle. That is the post's status, and it is also the control
+ * that puts the post back in the Inbox.
  */
 .tpp-archive-btn.is-on,
 .tpp-archive-btn.is-on:hover {
-  background: var(--tpp-purple);
-  border-color: transparent;
-  color: #fff;
+  background: var(--tpp-purple) !important;
+  border-color: transparent !important;
+  color: #fff !important;
 }
 
 /* A disabled button still reads as being in its on state. */
@@ -441,85 +459,12 @@ html[data-tpp-compact-posts]
 .tpp-post-btn:focus-visible {
   outline: 2px solid var(--tpp-purple);
   outline-offset: 2px;
-}
-
-/* Pinned posts: thin stacked bars --------------------------------------- */
-
-.tpp-pin-stack {
-  /*
-   * Above the posts and their gutter buttons, below Teams' own overlays. The
-   * stack is a fixed element in the page, so it needs only to clear the list's
-   * content; a Teams menu opens in a portal far above this layer. The huge
-   * value this used to carry put the bars over the Add-a-tab dropdown (and any
-   * other menu near the top of the list), because nothing Teams opens could
-   * out-rank it.
-   */
-  z-index: 8;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 60vh;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-  pointer-events: auto;
-}
-
-/*
+}/*
  * The stack floats over the top of the list, under the channel tabs, and is
  * positioned by script against the list's own box. It is never placed inside
  * the list: that is Teams' scroll box, so anything in it scrolls away — which
  * is what made a bar appear and then vanish.
- */
-
-/*
- * A pinned post is a purple bar until it is opened.
- */
-.tpp-pin-bar {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 12px;
-  border: none;
-  border-radius: 6px;
-  background: var(--tpp-purple);
-  color: #fff;
-  font: 600 12.5px/1.4 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
-  text-align: left;
-  cursor: pointer;
-  overflow: hidden;
-}
-
-.tpp-pin-bar:hover {
-  filter: brightness(1.1);
-}
-
-.tpp-pin-bar:focus-visible {
-  outline: 2px solid var(--tpp-purple);
-  outline-offset: 2px;
-}
-
-.tpp-pin-bar-title {
-  flex: none;
-  max-width: 55%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Whatever room is left on the bar carries the start of the post. */
-.tpp-pin-bar-snippet {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 400;
-  opacity: 0.85;
-}
-
-/* Inbox Zero: the empty-Inbox card --------------------------------------- */
+ *//* Whatever room is left on the bar carries the start of the post. *//* Inbox Zero: the empty-Inbox card --------------------------------------- */
 
 .tpp-empty-state {
   z-index: 2147482998;
@@ -956,13 +901,11 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-head * {
   white-space: nowrap !important;
 }
 
-
 /* Shared: toast and jump highlight --------------------------------------- */
 
 /*
- * A status message is a small modal of its own: larger type on a translucent
- * surface, dead centre on the page. It does not follow the post it is about —
- * one action has to report itself in one place (placeToast in content.js).
+ * A status message is a transparent modal card centered over the post div:
+ * larger type on a translucent surface with background blur.
  */
 .tpp-toast {
   position: fixed;
@@ -972,19 +915,21 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-head * {
   bottom: auto;
   transform: translate(-50%, -50%);
   width: auto;
-  max-width: min(480px, calc(100vw - 48px));
+  max-width: min(520px, calc(100vw - 48px));
   z-index: 2147483002;
   display: flex;
+  align-items: center;
   justify-content: center;
-  padding: 18px 26px;
-  border-radius: 14px;
-  background: rgba(47, 47, 92, 0.6);
-  backdrop-filter: blur(10px) saturate(130%);
-  -webkit-backdrop-filter: blur(10px) saturate(130%);
+  padding: 16px 26px;
+  border-radius: 12px;
+  background: rgba(36, 36, 72, 0.72);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   color: #fff;
-  font: 600 18px/1.4 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  font: 600 16px/1.4 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
   text-align: center;
-  box-shadow: 0 18px 48px rgba(20, 20, 48, 0.32);
+  box-shadow: 0 16px 44px rgba(15, 15, 40, 0.35);
   pointer-events: none;
   opacity: 0;
 }
@@ -996,88 +941,13 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-head * {
 @keyframes tpp-toast-in {
   from {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.96);
+    transform: translate(-50%, -50%) scale(0.95);
   }
   to {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
   }
-}
-
-/* A pinned bar and its own unpin button ---------------------------------- */
-
-/*
- * The unpin button sits on the left of its bar, so taking a pin down is one
- * click from the bar and never a trip to the post it points at.
- */
-.tpp-pin-item {
-  display: flex;
-  align-items: stretch;
-  gap: 6px;
-}
-
-.tpp-pin-item .tpp-pin-bar {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.tpp-pin-unpin {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 26px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: var(--tpp-purple);
-  color: #fff;
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
-  transition: filter 0.12s ease;
-}
-
-.tpp-pin-unpin:hover {
-  filter: brightness(1.14);
-}
-
-.tpp-pin-unpin:focus-visible {
-  outline: 2px solid var(--tpp-purple);
-  outline-offset: 2px;
-}
-
-/* Abandoning a search for an old pin ------------------------------------- */
-
-/*
- * Shown only while a pin's post is being looked for, so a post from months back
- * never traps the user in a scroll the extension started.
- */
-.tpp-search-cancel {
-  position: fixed;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  z-index: 2147483002;
-  padding: 10px 18px;
-  border: none;
-  border-radius: 999px;
-  background: rgba(47, 47, 92, 0.92);
-  color: #fff;
-  font: 600 13px/1.2 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
-  cursor: pointer;
-  box-shadow: 0 10px 26px rgba(14, 14, 34, 0.4);
-}
-
-.tpp-search-cancel:hover {
-  background: var(--tpp-purple);
-}
-
-.tpp-search-cancel:focus-visible {
-  outline: 2px solid #fff;
-  outline-offset: 2px;
-}
-
-@media (prefers-reduced-motion: reduce) {
+}@media (prefers-reduced-motion: reduce) {
   /* Filing still waits for the post to leave, it just does not slide. */
   .tpp-post.tpp-archiving,
   .tpp-post.tpp-unarchiving {

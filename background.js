@@ -13,6 +13,7 @@
  *   open Teams tabs, and opens changelog.html.
  */
 
+/* global importScripts */
 importScripts('src/shared/features.js');
 
 /** Every Teams web origin, +/* — the only sites Teams++ ever touches. */
@@ -23,7 +24,7 @@ const TEAMS_ORIGINS = [
 ];
 const CONTENT_SCRIPT_ID = 'teamspp-content';
 /** Bumped with every change to the content script; see the refresh block below. */
-const CONTENT_VERSION = '0.6.5-2026-11-02.115';
+const CONTENT_VERSION = '1.0.0-2026-11-03.140';
 
 const { DEFAULTS, STORAGE_KEY, VIEW_KEY } = globalThis.TeamsPlusPlus;
 

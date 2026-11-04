@@ -5,18 +5,13 @@
  *
  *   Inbox Zero      Every post is read or unread, and every post gets an
  *                   Archive button in its left margin; comments and replies
- *                   never get one. Read state is Teams++'s own: the moment the
- *                   extension was installed is stored once, and a post stamped
- *                   later is unread until the Archive button files it.
- *                   Everything already in the channel is read. Teams' New
- *                   badge and Last read line are not shown — the Inbox and
- *                   Archive tabs are the marker now.
- *
- *   Pinned posts    Posts a channel moderator has pinned for everyone sit in
- *                   purple bars directly under the channel menu bar, above the
- *                   "Post in channel" box. A bar opens the post where it sits in
- *                   the stream, through Teams' own pinned list, so the bar never
- *                   carries a copy of the post.
+ *                   never get one. A post is unread when Teams says so: its
+ *                   clock (anything stamped after the extension was installed)
+ *                   or its own New badge. A badge is written down as an unread
+ *                   decision the first time it is seen, so the post stays in
+ *                   the Inbox after Teams clears the badge. Only the Archive
+ *                   button files it. Teams' Last read line is not shown — the
+ *                   Inbox and Archive tabs are the marker now.
  *
  * Everything the user changes is written to chrome.storage.sync, so the same
  * archive and view follow them to every Chrome profile.
@@ -54,42 +49,34 @@
    * a copy of the post's words. Pinning is Teams' own now, so it is removed.
    */
   const LEGACY_PINS_KEY = 'teamsPlusPlus.pins';
-  /** A channel is identified by its id, under this prefix. */
-  const CHANNEL_PREFIX = 'channel:';
-  /** How long a bar Teams pinned is kept after the post stops being rendered. */
-  const NATIVE_PIN_TTL = 5 * 60 * 1000;
   /**
-   * How long a pin Teams no longer lists is kept before its bar goes. Short on
-   * purpose: this only exists to survive a re-render of Teams' own list, not to
-   * make the user wait to see that their unpin worked.
+   * What each archived post looked like when it was filed, in local storage.
+   * It is derived from what Teams rendered on this device rather than a
+   * decision the user made, so it does not travel with the synced archive.
    */
-  const PIN_MISSING_GRACE = 300;
-  /**
-   * How long the pinned sidebar is left alone after a channel switch. Teams
-   * reuses that pane, and it is filled a moment after the list is; read too
-   * soon it still holds the channel before this one.
-   */
-  const PIN_PANE_SETTLE = 1000;
-  /** A short hold for a pin Teams itself took down, against a stale sidebar. */
-  const UNPIN_QUICK_HOLD = 3000;
-  /** How long a post the user just unpinned is kept clear of a returning bar. */
-  const UNPIN_HOLD = 60 * 1000;
+  const ACTIVITY_KEY = 'teamsPlusPlus.activity';
+  const ACTIVITY_LIMIT = 300;
 
   const VIEW_INBOX = 'inbox';
   const VIEW_ARCHIVES = 'archives';
 
   const TABS_ID = 'tpp-tabs';
   const CONFETTI_ID = 'tpp-confetti';
-  const STACK_ID = 'tpp-pin-stack';
   const EMPTY_ID = 'tpp-empty-state';
   const TOAST_ID = 'tpp-toast';
+  /**
+   * How often the idle pass runs while the page mutates for its own reasons.
+   *
+   * A scan is cheap when the posts have not changed (see scanNow), but it still
+   * asks the page a few questions; at 1.5 s it ran dozens of times a minute on
+   * a channel nobody was touching.
+   */
+  const SLOW_SCAN_MS = 4000;
   /** How long a post takes to slide out of the Inbox when it is archived. */
   const ARCHIVE_ANIM_MS = 300;
   const HAS_ARCHIVES_ATTR = 'data-tpp-has-archives';
   /** Set when the current view has no post on show at all (teams.css). */
   const EMPTY_VIEW_ATTR = 'data-tpp-empty-view';
-  /** The pin model, serialised onto <html> so DevTools can read it (see below). */
-  /** When the debug attribute was last written: it is a readout, not a feature. */
   /**
    * The panes Teams draws a single post in, outside the Posts list: the view
    * "Find in channel" opens, a message's thread, a pinned post. Nothing of ours
@@ -101,7 +88,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-02.115';
+  const BUILD = '2026-11-03.140';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -118,10 +105,10 @@
   /** Width of the left margin the post buttons float in, in px. */
   const RAIL_GUTTER = 32;
 
-  const PIN_FILLED_SVG =
-    '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M9 3h6l-1 6 4 4v2H6v-2l4-4-1-6z"/><path d="M12 15v6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
   const ARCHIVE_SVG =
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>';
+  const ARCHIVE_FILLED_SVG =
+    '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M3 4a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v4H3V4z"/><path fill="currentColor" fill-rule="evenodd" d="M5 9v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9H5zm5 3a1 1 0 0 1 1-1h2a1 1 0 1 1 0 2h-2a1 1 0 0 1-1-1z" clip-rule="evenodd"/></svg>';
   /**
    * A box with an arrow lifting out of it: the way out of the Archive, and the
    * one shape everyone already reads as "take it back".
@@ -135,6 +122,15 @@
   /** The small chevron on a folded post's card: this card opens. */
   const CHEVRON_SVG =
     '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
+  /** The channel header watched for a channel change (see watchChannelTitle). */
+  let titleEl = null;
+  let titleObserver = null;
+
+  /** When the message list first went missing, in ms, or 0 while it is there. */
+  let listMissingAt = 0;
+
+  /** When the verdict first said "not a channel", in ms, or 0 while it says yes. */
+  let notChannelAt = 0;
   let ready = false;
   let features = null;
   /**
@@ -143,13 +139,11 @@
    * with no entry is judged by its timestamp against `since`, below.
    */
   let readState = {};
+  /** id -> the activity fingerprint taken when the post was last read. */
+  let activityState = {};
+  let activitySaveTimer = 0;
   /** When the extension was installed, in ms. Posts stamped later are unread. */
   let since = 0;
-  /**
-   * The channel the bars belong to. Teams' pins are per channel, and every bar
-   * on screen is this channel's.
-   */
-  let pinChannel = '';
   let view = VIEW_INBOX;
   /**
    * Whether the page on screen is a channel's Posts area. Teams++ is for
@@ -160,46 +154,53 @@
   let channelMode = null;
   /** The element carrying the room after the rows: see markRoom. */
   let roomEl = null;
+  /** The view the scroll was last clamped for (see clampScroll). */
+  let clampView = '';
 
   /** id -> { row, id, text, author, read, ts } for the latest scan. */
   let rowsById = new Map();
-  /**
-   * id -> { id, text, paneText, author, seenAt } for posts Teams itself pinned.
-   *
-   * Kept, not rebuilt: Teams stops rendering a post as soon as it scrolls out of
-   * the virtualised list, and closes the "Pinned" accordion as well, and a bar
-   * that existed only while the post happened to be on screen went and came back
-   * with every batch. Entries are pruned by age, by channel, and on unpin.
-   */
-  let nativePins = new Map();
-  /** When the bar list first came up empty, so a transient gap is not a removal. */
-  let emptyPinsAt = 0;
-  /** Posts the user unpinned recently: no remembered or harvested bar may return. */
-  const recentUnpins = new Map();
-  /** Set when the user unpinned, so the bars are redrawn without the grace. */
-  let explicitPinChange = false;
 
   let observer = null;
   let lastList = null;
   let listRect = null;
-  /** The box whose own top padding holds the room the pinned bars take. */
-  let pinHost = null;
   /** When the theme was last re-checked from the scan (it is not free). */
   let themeAt = 0;
   /** The channel's own "Posts" tab while our tabs stand in for it. */
   let hiddenNativeTab = null;
-  /** The walk through the channel that is looking for a pinned post. */
-  let pinJump = null;
-  /** Which jump's top alignment is current, so an older one stops correcting. */
-  let pinAlignToken = 0;
-  /** The button that abandons that walk. */
-  let searchCancelBtn = null;
   /** Posts the user has unfolded in the compact view, by id. */
   const unfolded = new Set();
   /** Set while a click we generated is in flight, so it is not read as the user's. */
   let forwardingClick = false;
   let rescanTimer = 0;
   let slowTimer = 0;
+  /**
+   * Whether anything in the posts list has changed since the rows were last
+   * read. Teams mutates the page constantly for reasons that have nothing to do
+   * with the posts, and re-reading every post for each of those was the load
+   * this script put on the main thread while a channel was arriving.
+   */
+  let listDirty = true;
+  /**
+   * Scan timings, kept for the readout in `start` — off unless switched on with
+   * `localStorage.tppPerf = '1'`, so nothing is measured in normal use.
+   */
+  const perf = {
+    on: false,
+    scans: 0,
+    total: 0,
+    max: 0,
+    rebuilds: 0,
+    rebuildTotal: 0,
+    batches: 0,
+    relevant: 0,
+    mutTotal: 0,
+    mutMax: 0,
+    startedAt: Date.now(),
+    loadStartedAt: 0,
+    loadMs: 0,
+    loadRows: 0,
+    writtenAt: 0
+  };
   let readSaveTimer = 0;
   let frame = 0;
   /** Cached answers to the two "hands off" checks (see teamsPostPane/composerOpen). */
@@ -802,6 +803,7 @@
   }
 
   function findMessageList() {
+    let fallback = null;
     for (const selector of S.messageList || []) {
       let found = null;
       try {
@@ -810,12 +812,16 @@
         continue; // A bad selector from a hand edit should not stop the rest.
       }
       // The last-resort `div[role="log"]` anchor also matches the aria-live
-      // region Teams keeps beside a message editor. Taken for the list, it
-      // parks our gutter padding, the pinned bars and the empty state inside
-      // the reply box, which clips the reply area's own controls. A candidate
-      // inside a compose field is never the list.
-      if (found && !isComposeField(found)) return found;
+      // region Teams keeps beside a message editor. A candidate inside a
+      // compose field is never the list.
+      if (!found || isComposeField(found)) continue;
+      // Teams keeps the channel before this one mounted for a moment during a
+      // switch. A list with no box is that leftover; the one on screen is the
+      // list this scan is for.
+      if (found.getClientRects().length) return found;
+      if (!fallback) fallback = found;
     }
+    if (fallback) return fallback;
 
     // Markup changed: climb from a known row to whatever actually scrolls.
     const row = first(S.messageRow);
@@ -1005,90 +1011,179 @@
   }
 
   /**
-   * The subject Teams prints above a post's text: its own heading, which sits
-   * beside the body rather than in it. Read every time — `textContent` needs no
-   * line boxes, so this works on a post that is folded away onto its bar.
+   * Teams' "N replies" count, or -1 when the post prints no count at all.
+   *
+   * The count is the one part of a thread Teams shows on the post without its
+   * replies being rendered, which is what makes it useful for spotting new
+   * activity in the Archive. It is read from the footer/count anchor rather
+   * than the whole row: a post can hold a long thread, and walking all of it on
+   * every scan is exactly the cost this scan avoids elsewhere.
    */
-  function headingOf(row) {
-    if (!row) return '';
-    const el = first(S.messageSubject, row);
-    return el ? collapse(el.textContent || '').slice(0, 140) : '';
+  function replyCountOf(row) {
+    const el = first(S.replyCount, row);
+    const match = /(\d[\d,]*)\s+repl(?:y|ies)\b/i.exec(el ? el.textContent || '' : '');
+    return match ? Number(match[1].replace(/,/g, '')) : -1;
   }
 
   /**
-   * The line a pinned bar shows after the author: the post's subject line. Only
-   * a post Teams prints no heading on falls back to its first written line,
-   * which is where the message starts. Only pinned posts are asked for it, since
-   * reading layout text is not free and the list is scanned on every Teams
-   * render.
+   * Teams' own New badge on a post, as a short string, or '' when it shows none.
+   *
+   * This is the read state the user already reads in Teams, so it is honoured
+   * beside the install clock: a post it flags belongs in the Inbox until the
+   * Archive button files it. Only the badge itself is read — a short "New" or
+   * "Unread" label. A menu item ("Mark as unread") and anything of ours are
+   * ignored, because opening a post's menu must not reopen the post.
    */
-  function subjectOf(row) {
-    const heading = headingOf(row);
-    if (heading) return heading;
+  function newMarkerOf(row) {
     if (!row) return '';
-    const body = first(S.messageBody, row) || row;
-    const lines = String(body.innerText || body.textContent || '').split(/\n+/);
-    for (const line of lines) {
-      const text = collapse(line);
-      if (text) return text.slice(0, 140);
+    for (const selector of S.unreadMarker || []) {
+      let found = [];
+      try {
+        found = Array.from(row.querySelectorAll(selector));
+      } catch (_) {
+        continue; // A hand-edited selector should never cost us the row.
+      }
+      for (const el of found) {
+        if (el.closest('[data-tpp-ui]')) continue;
+        if (
+          el.closest(
+            '[role="menu"], [role="menuitem"], [data-tid*="menu" i], [data-tid*="contextual" i]'
+          )
+        ) {
+          continue;
+        }
+        const text = collapse(el.textContent || '');
+        const label = collapse(el.getAttribute('aria-label') || '');
+        const words = text || label;
+        if (!words) {
+          // A dot with no words of its own: its data-tid is the badge's name,
+          // which is enough when Teams draws the marker as a shape.
+          const tid = el.getAttribute('data-tid') || '';
+          if (/unread|new-message-(?:badge|status)/i.test(tid)) return 'unread';
+          continue;
+        }
+        if (
+          /^(?:\d+\s*)?(?:new|unread)(?:\s+(?:activity|post|reply|replies|message|messages|items?))?$/i.test(
+            words
+          )
+        ) {
+          return words.toLowerCase();
+        }
+      }
     }
     return '';
   }
 
-  /**
-   * What a pinned bar shows after the subject: the rest of the post, once the
-   * subject line has been taken off the front of it.
-   */
-  function snippetOf(row, subject) {
-    if (!row) return '';
-    const body = previewOf(row);
-    const lead = collapse(subject || '');
-    let rest = body;
-    if (lead && rest.startsWith(lead)) rest = rest.slice(lead.length);
-    rest = rest.replace(/^[\s\-–—:|,.]+/, '');
-    return rest.slice(0, 160);
-  }
-
-  function isNativePinned(row) {
-    // Almost no post is pinned, so the cheap question is asked first: does this
-    // row mention a pin at all? One text read against a walk of every element
-    // in the post, on every scan, is the difference this makes.
-    let mentionsPin = /pinned/i.test(row.textContent || '');
-    if (!mentionsPin) {
-      try {
-        mentionsPin = Boolean(
-          row.querySelector('[data-tid*="pinned" i], [aria-label*="pinned" i], [title*="pinned" i]')
-        );
-      } catch (_) {
-        mentionsPin = false;
+  /** The reactions on a post, as a stable fingerprint of their labels and counts. */
+  function reactionsOf(row) {
+    const seen = [];
+    try {
+      for (const el of row.querySelectorAll(
+        '[data-tid*="reaction" i], [aria-label*="reaction" i]'
+      )) {
+        if (el.closest('[data-tpp-ui]')) continue;
+        const label = collapse(el.getAttribute('aria-label') || '');
+        const text = collapse(el.textContent || '').slice(0, 40);
+        // A reaction chip shows its count. Teams' "Add reaction" button has no
+        // number, and it comes and goes with hover — counting it would reopen a
+        // post just because the pointer crossed it.
+        if (!/\d/.test(`${label} ${text}`)) continue;
+        seen.push(`${label}:${text}`);
       }
+    } catch (_) {
+      // No reaction markup in this build: an empty fingerprint is still stable.
     }
-    if (!mentionsPin) return false;
+    return hash(seen.join('|'));
+  }
 
-    const body = first(S.messageBody, row);
-
-    for (const el of row.querySelectorAll(S.nativePin.join(','))) {
-      if (el.closest('.tpp-post-actions')) continue;
-      // A post that merely quotes the word "pinned" is not a pinned post.
-      if (body && body.contains(el)) continue;
-      return true;
+  /** How many attachments, images or GIFs the post carries. */
+  function attachmentCountOf(row) {
+    try {
+      return row.querySelectorAll(
+        '[data-tid*="attachment" i], [data-tid*="image" i], [data-tid*="gif" i]'
+      ).length;
+    } catch (_) {
+      return 0;
     }
-
-    // Teams sometimes shows a plain "Pinned" / "Pinned by …" label instead.
-    for (const el of row.querySelectorAll('span, div')) {
-      if (el.closest('.tpp-post-actions')) continue;
-      if (body && body.contains(el)) continue;
-      const text = collapse(el.textContent || '');
-      if (text && text.length < 50 && /^pinned(\s+by\b.+)?$/i.test(text)) return true;
-    }
-
-    return false;
   }
 
   /**
-   * True when the row is a comment or a reply rather than a post of its own.
-   * Only posts get archive/pin controls, so these rows are ignored entirely.
+   * One string describing a post as it stands: its reply count, reactions,
+   * attachments and own words. Two equal fingerprints mean nothing has
+   * happened to the post; a different one means it has moved on.
    */
+  function activityOf(row, text) {
+    if (!row) return '';
+    const words = text === undefined ? previewOf(row) : text;
+    return [
+      replyCountOf(row),
+      reactionsOf(row),
+      attachmentCountOf(row),
+      hash(words || '')
+    ].join('|');
+  }
+
+  /** Keeps only well-formed fingerprints, newest last, under the cap. */
+  function normalizeActivity(stored) {
+    if (!stored || typeof stored !== 'object') return {};
+    const entries = Object.entries(stored).filter(
+      ([id, signature]) =>
+        typeof id === 'string' && id.length > 0 && typeof signature === 'string' && signature
+    );
+    return Object.fromEntries(entries.slice(-ACTIVITY_LIMIT));
+  }
+
+  function saveActivitySoon() {
+    clearTimeout(activitySaveTimer);
+    activitySaveTimer = setTimeout(() => {
+      activitySaveTimer = 0;
+      persistActivity();
+    }, 300);
+  }
+
+  function persistActivity() {
+    const entries = Object.entries(activityState);
+    if (entries.length > ACTIVITY_LIMIT) {
+      activityState = Object.fromEntries(entries.slice(-ACTIVITY_LIMIT));
+    }
+    try {
+      chrome.storage.local.set({ [ACTIVITY_KEY]: activityState }, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (_) {
+      // The extension was reloaded while this page stayed open.
+    }
+  }
+
+  /**
+   * Has a read post moved on since it was filed?
+   *
+   * Teams gives a post no activity timestamp, so the post itself is
+   * fingerprinted. The fingerprint is taken the first time a post is seen as
+   * read (and again at the moment it is archived) and compared here. A
+   * different one means someone replied, reacted, attached something or edited
+   * the post — and a post with news in it does not belong in the Archive.
+   */
+  function archivedChanged(id, row, text) {
+    if (!id || !features || !features.inboxZero) return false;
+    // Only a post whose body Teams has actually drawn is comparable: a row that
+    // is still arriving has a header but no words, and taking that as "changed"
+    // would reopen every post that finished rendering.
+    if (!first(S.messageBody, row)) return false;
+    const current = activityOf(row, text);
+    if (!current) return false;
+    const seen = activityState[id];
+    if (seen === undefined) {
+      activityState[id] = current;
+      saveActivitySoon();
+      return false;
+    }
+    if (seen === current) return false;
+    delete activityState[id];
+    saveActivitySoon();
+    return true;
+  }
+
   function isComment(row) {
     for (const selector of S.commentRoot || []) {
       try {
@@ -1229,7 +1324,7 @@
       for (let parent = el.parentElement; parent && parent !== root; parent = parent.parentElement) {
         if (candidates.has(parent)) return false;
       }
-      if (el.closest('.tpp-post-actions, .tpp-pin-stack, .tpp-empty-state, .tpp-tabs')) return false;
+      if (el.closest('.tpp-post-actions, .tpp-empty-state, .tpp-tabs')) return false;
       if (!allowDialog && el.closest('[role="dialog"]')) return false;
       if (isComment(el)) return false;
       return true;
@@ -1268,24 +1363,7 @@
       }
       row.classList.add('tpp-post');
 
-      // A post the user has just unpinned stays unpinned here too: Teams keeps
-      // its own pin marker for a moment after the request, and reading it would
-      // put the bar straight back.
-      const nativePinned = isNativePinned(row) && !isRecentlyUnpinned(id);
       const authored = authorOf(row);
-      // A bar reads "Author: subject line", so only pinned posts pay for it.
-      // A pinned post is hidden in the stream, where there are no line boxes for
-      // innerText to take the first line from, so the line is remembered while
-      // the post is visible and reused after it moves onto its bar.
-      let subject = text;
-      if (nativePinned) {
-        // The heading is read every time: it is text, not layout, so it works on
-        // a post folded away onto its bar. The remembered copy is the fallback
-        // for a post Teams prints no heading on, where the first line can only
-        // be read while the post still has line boxes.
-        subject = headingOf(row) || row.dataset.tppSubject || subjectOf(row) || text;
-        if (row.dataset.tppSubject !== subject) row.dataset.tppSubject = subject;
-      }
 
       // The whole model: a read post is tagged, an unread one is not. The stamp
       // is read once here and kept on the row: every later question about this
@@ -1293,46 +1371,49 @@
       // the DOM again, which was several selectors per post on every scan.
       const ts = timeOf(id, row);
       row.dataset.tppTs = String(ts || 0);
-      setTag(row, isReadPost(id, ts) ? 'read' : '');
-      // A row we had already tagged as pinned that Teams no longer marks: the
-      // pin was taken down. The bar goes with it in this same scan rather than
-      // after a grace period. The short hold stops Teams' still-stale sidebar
-      // from putting it straight back, and a row Teams rebuilt arrives without
-      // our tag, so a re-render cannot be read as an unpin.
-      const wasPinned = row.dataset.tppNativePin === '1';
-      if (row.dataset.tppNativePin !== (nativePinned ? '1' : '0')) {
-        row.dataset.tppNativePin = nativePinned ? '1' : '0';
-      }
-      if (wasPinned && !nativePinned) {
-        forgetNativePin(id);
-        holdUnpinned(id, UNPIN_QUICK_HOLD);
-        explicitPinChange = true;
-      }
-      paintRow(row, nativePinned);
+      const marker = newMarkerOf(row);
+      let isRead = isReadPost(id, ts);
 
-      // A row read while the channel is changing says nothing about this
-      // channel's pins: it is the last channel's row, still on screen.
-      if (nativePinned && !pinSwitchPending && Date.now() >= pinSettleUntil) {
-        rememberNativePin('row:' + id, { id, text: subject, author: authored });
+      // Teams' own New badge, read beside the clock. A badge that was not
+      // showing when the post was filed means something arrived after it, so
+      // the post goes back to the Inbox; the badge it was filed with is the one
+      // the user chose to leave behind and is not news. An unread post that
+      // carries a badge is written down, so it stays in the Inbox once Teams
+      // clears the badge on open rather than dropping into the Archive.
+      if (!isRead) {
+        if (marker) latchUnread(id);
+      } else if (marker) {
+        const filed = readState[id];
+        if (!filed || filed.m !== marker) {
+          remember(id, false);
+          saveReadSoon();
+          isRead = false;
+        }
+      } else if (readState[id] && readState[id].m) {
+        // The badge it was filed with has cleared: a later one is news again.
+        delete readState[id].m;
+        saveReadSoon();
       }
+
+      // Filing a post is not permission to miss the answer to it: one whose
+      // replies, reactions, attachments or words moved on is back in the Inbox.
+      if (isRead && archivedChanged(id, row, text)) {
+        remember(id, false);
+        saveReadSoon();
+        isRead = false;
+      }
+      setTag(row, isRead ? 'read' : '');
+      paintRow(row);
       next.set(id, {
         row,
         id,
         text,
         author: authored,
         read: row.dataset.tppTag === 'read',
-        ts
-      });
+        ts      });
     }
 
     rowsById = next;
-    if (features.pinnedMessages) {
-      harvestPinnedPane();
-      // Without Teams' list on screen, a rendered row is the only evidence there
-      // is: a post that no longer carries Teams' pin marker is not pinned.
-      if (!first(S.pinnedPane)) sweepNativePins(null);
-      pruneNativePins();
-    }
     applyViewFiltering();
   }
 
@@ -1361,6 +1442,25 @@
     const entry = id ? readState[id] : null;
     if (entry) return entry.r !== 0;
     return !(since > 0 && ts > since);
+  }
+
+  /**
+   * Writes a post Teams flags as New into the Inbox, and keeps it there.
+   *
+   * Teams clears the badge when the channel is opened, so trusting the badge
+   * alone would drop the post back into the Archive before the user reached it.
+   * The first sighting is written down as an unread decision — `n` marks it as
+   * Teams' own flag rather than a click — and only the Archive button changes
+   * it after that.
+   */
+  function latchUnread(id) {
+    if (!id) return false;
+    const entry = readState[id];
+    if (entry && entry.r === 0) return false;
+    delete readState[id];
+    readState[id] = { t: Date.now(), r: 0, n: 1 };
+    saveReadSoon();
+    return true;
   }
 
   /**
@@ -1414,7 +1514,7 @@
     for (const row of scope.querySelectorAll('.tpp-post')) {
       // A node this scan does not know as a post — a recycled wrapper, a copy
       // Teams left behind — keeps no controls: a rail of its own would float in
-      // the list with no post under it, which is how a lone Archive/Pin pair
+      // the list with no post under it, which is how a lone Archive button
       // appeared in the middle of an empty Archive.
       const record = row.dataset.tppId ? rowsById.get(row.dataset.tppId) : null;
       if (inTeamsPane(row) || (record ? record.row !== row : row.dataset.tppModal !== '1')) {
@@ -1441,7 +1541,7 @@
       setTag(row, isRead ? 'read' : '');
       if (empty) untuck(row);
       else markTucked(row, row.dataset.tppId);
-      paintRow(row, row.dataset.tppNativePin === '1');
+      paintRow(row);
     }
 
     publishArchivePresence(anyRead);
@@ -1574,7 +1674,7 @@
    * actually changed, so Teams' constant re-rendering cannot make the list
    * flash; which view shows it is decided by the tag in CSS alone.
    */
-  function paintRow(row, nativePinned) {
+  function paintRow(row) {
     const tag = row.dataset.tppTag === 'read' ? 'read' : '';
 
     // The body is marked so the compact view can clamp it, and a post the user
@@ -1587,19 +1687,12 @@
     if (row.dataset.tppId && unfolded.has(row.dataset.tppId)) row.classList.add('tpp-unfold');
     else row.classList.remove('tpp-unfold');
 
-    const painted = [
-      tag,
-      nativePinned ? '1' : '0',
-      features.inboxZero ? '1' : '0',
-      // A pinned post keeps its Archive button in the Archive and has none in
-      // the Inbox, so the rail a row needs differs by tab.
-      view
-    ].join('|');
+    const painted = [tag, features.inboxZero ? '1' : '0', view].join('|');
 
     const railGone = features.inboxZero && !row.querySelector('.tpp-post-actions');
     if (row.dataset.tppPainted !== painted || railGone) {
       row.dataset.tppPainted = painted;
-      injectActions(row, tag === 'read', nativePinned);
+      injectActions(row, tag === 'read');
     }
 
     // The card is on the row: the post can be shown. teams.css keeps a folded
@@ -1621,273 +1714,8 @@
       if (row.dataset.tppId !== id) continue;
       setTag(row, isRead ? 'read' : '');
       markTucked(row, row.dataset.tppId);
-      paintRow(row, row.dataset.tppNativePin === '1');
+      paintRow(row);
     }
-  }
-
-  /**
-   * Repaints the row for a post whose pin state just changed.
-   *
-   * The rail is decided from whether Teams has the post pinned, so it has to be
-   * redrawn at the moment that changes: waiting for a scan left an unpinned post
-   * still without its Archive button, which is what made unpinning look like it
-   * had not worked.
-   */
-  function repaintPinned(id) {
-    if (!id) return;
-    for (const row of document.querySelectorAll('.tpp-post')) {
-      if (row.dataset.tppId !== id) continue;
-      paintRow(row, row.dataset.tppNativePin === '1');
-    }
-  }
-
-  /** The snippet Teams shows for one pinned post in its sidebar list. */
-  function paneItemText(item) {
-    const el =
-      item.querySelector('[data-tid*="pinned-post-item-text-content" i]') ||
-      item.querySelector('[data-tid*="text-content" i]');
-    if (el) return collapse(el.textContent || '');
-
-    const first = item.querySelector('[dir="auto"]');
-    return first ? collapse(first.textContent || '') : '';
-  }
-
-  /** The author on a pinned item's meta line ("Jonathan Kung, Saturday 8:54 p.m."). */
-  function paneItemAuthor(item, text) {
-    for (const span of item.querySelectorAll('[dir="auto"]')) {
-      const value = collapse(span.textContent || '');
-      if (!value || value === text) continue;
-      const author = value.split(',')[0].trim();
-      if (author && author.length <= 60) return author;
-    }
-    return '';
-  }
-
-  /**
-   * The channel post a pinned sidebar item points at. The item carries a snippet
-   * of the post, not its id, so the post is found by its words — the author
-   * breaks ties when two posts start the same way.
-   */
-  function pinnedSidebarPost(text, author) {
-    const wanted = collapse(text).toLowerCase();
-    if (wanted.length < 4) return null;
-
-    let best = null;
-    for (const record of rowsById.values()) {
-      const preview = collapse(record.text || '').toLowerCase();
-      // A pinned item's line is the post's subject, while the row's preview is
-      // the message itself. The heading is what makes the two the same post, and
-      // without it a pinned item is filed as an id-less pin — which is the bar
-      // that cannot show the body, next to the one that can.
-      const heading = collapse(
-        headingOf(record.row) || record.row?.dataset.tppSubject || ''
-      ).toLowerCase();
-      let score = 0;
-      if (preview.startsWith(wanted)) score = 2;
-      else if (preview.includes(wanted)) score = 1;
-      else if (wanted.startsWith(preview) && preview.length >= 4) score = 1;
-      else if (
-        heading.length >= 4 &&
-        (heading === wanted || heading.startsWith(wanted) || wanted.startsWith(heading))
-      ) {
-        score = 2;
-      }
-      if (!score) continue;
-
-      if (author && record.author && record.author.toLowerCase() === author.toLowerCase()) {
-        score += 3;
-      }
-      if (!best || score > best.score) best = { record, score };
-    }
-    return best ? best.record : null;
-  }
-
-  /**
-   * Teams' pinned list, but only the one actually on screen.
-   *
-   * The query alone can find a pane Teams has kept mounted but hidden; that one
-   * belongs to the channel it was drawn for, not to the one now in front.
-   */
-  function pinnedPaneOnScreen() {
-    for (const selector of S.pinnedPane || []) {
-      let found = [];
-      try {
-        found = document.querySelectorAll(selector);
-      } catch (_) {
-        continue;
-      }
-      for (const el of found) {
-        if (el.getClientRects().length) return el;
-      }
-    }
-    return null;
-  }
-
-  /** What the visible pinned list is saying, as one comparable string. */
-  function pinPaneSignature(pane) {
-    if (!pane) return '';
-    let signature = '';
-    for (const item of pane.querySelectorAll('[role="menuitem"]')) {
-      const text = paneItemText(item);
-      signature += `${text}\u241f${paneItemAuthor(item, text)}\u241e`;
-    }
-    return signature.slice(0, 2000);
-  }
-
-  /**
-   * Picks up the posts pinned for the whole channel from Teams' own list.
-   *
-   * The "Pinned" accordion in the "In this channel" sidebar is the reliable
-   * sign of a moderator's pin: it lists exactly the posts pinned for everyone,
-   * and nothing a user pinned for themselves. That is what makes such a bar
-   * unpinnable for a regular user — Teams only offers an unpin control to people
-   * who may pin in the channel.
-   *
-   * A pin whose post is not loaded is still shown: clicking its bar then walks
-   * the channel back through its history to find it.
-   */
-  /**
-   * Remembers a post pin Teams itself knows about.
-   *
-   * A bar must outlive the row it was read from: Teams drops rows out of its
-   * virtualised list and closes the "Pinned" accordion as its pane re-renders,
-   * so a map rebuilt on every scan made the bar blink in and out with the posts.
-   */
-  function rememberNativePin(key, entry) {
-    const seen = nativePins.get(key);
-    // Every record says which channel it was read in. Records for another
-    // channel are never built into bars, even if one survives a re-render.
-    const next = { ...(seen || {}), ...entry, channel: pinChannel, seenAt: Date.now() };
-    // Seen again: the absence that was being timed is over.
-    delete next.missingAt;
-    nativePins.set(key, next);
-  }
-
-  /** Drops every bar a post still wears after it was unpinned in Teams. */
-  function forgetNativePin(id) {
-    if (!id) return;
-    for (const [key, pin] of nativePins) {
-      if (pin && pin.id === id) nativePins.delete(key);
-    }
-  }
-
-  /** Forgets bars for posts Teams has stopped showing for a long time. */
-  function pruneNativePins() {
-    const now = Date.now();
-    for (const [key, pin] of nativePins) {
-      if (now - (pin.seenAt || 0) > NATIVE_PIN_TTL) nativePins.delete(key);
-    }
-  }
-
-  /**
-   * Erases the bars of pins Teams no longer has.
-   *
-   * `listed` is Teams' own pinned list while it is on screen — the whole
-   * channel's pins, and the truth on the subject — or null when it is not. A bar
-   * stays while either Teams still lists the post or the post still carries
-   * Teams' pin marker; it is removed after a short absence, so a re-render of the
-   * list cannot blink it out and back again.
-   */
-  function sweepNativePins(listed) {
-    const now = Date.now();
-    for (const [key, pin] of nativePins) {
-      if (!pin) continue;
-      // Without a post id there is nothing to be absent from anywhere: such a bar
-      // is only ever aged out (pruneNativePins).
-      if (!pin.id) continue;
-      if (listed && listed.has(pin.id)) continue;
-
-      const row = findRow(pin.id);
-      if (row && row.dataset.tppNativePin === '1') continue;
-      if (isRecentlyUnpinned(pin.id)) continue;
-      // A post with no row rendered can only be judged by Teams' list; with no
-      // list either, age is the only word there is (pruneNativePins).
-      if (!row && !listed) continue;
-
-      if (!pin.missingAt) {
-        nativePins.set(key, { ...pin, missingAt: now });
-        continue;
-      }
-      if (now - pin.missingAt < PIN_MISSING_GRACE) continue;
-      // Gone: this scan's render erases the bar (explicitPinChange skips the
-      // empty-stack grace), and the short hold keeps a stale sidebar quiet.
-      nativePins.delete(key);
-      holdUnpinned(pin.id, UNPIN_QUICK_HOLD);
-      explicitPinChange = true;
-    }
-  }
-
-  function harvestPinnedPane() {
-    // Mid-switch the pins are not this channel's to read yet.
-    if (pinSwitchPending) return;
-
-    // Teams reuses the sidebar across channels and fills it a moment after the
-    // list. Until that moment its items are the previous channel's, and filing
-    // them here would give this channel bars it never pinned.
-    if (Date.now() < pinSettleUntil) {
-      scheduleScan(true);
-      return;
-    }
-
-    // Only a pane on screen is this channel's list. Teams keeps the "In this
-    // channel" pane mounted after a switch, and reading the hidden one filed
-    // the previous channel's pins under the channel now on screen.
-    const pane = pinnedPaneOnScreen();
-    if (!pane) return;
-
-    // The pane Teams reuses may still be showing the channel before this one.
-    // Its words are only trusted once they differ from what the old channel
-    // said; until then an item has to point at a post on screen that Teams
-    // itself marks pinned, which no stale list can fake.
-    const signature = pinPaneSignature(pane);
-    const stale = Boolean(pinPaneStaleSig && signature === pinPaneStaleSig);
-    if (stale) {
-      if (pinPaneStaleTries < 8) {
-        pinPaneStaleTries += 1;
-        scheduleScan(true);
-      }
-    } else {
-      pinPaneStaleSig = '';
-      pinPaneStaleTries = 0;
-    }
-
-    const listed = new Set();
-
-    for (const item of pane.querySelectorAll('[role="menuitem"]')) {
-      // A row that is not painted is not a pin this channel is showing.
-      if (!item.getClientRects().length) continue;
-      const text = paneItemText(item);
-      if (!text) continue;
-
-      const author = paneItemAuthor(item, text);
-      const record = pinnedSidebarPost(text, author);
-      const id = record ? record.id : '';
-      if (id) listed.add(id);
-
-      // An old pane's item is only this channel's pin if the post it names is
-      // on screen and wears Teams' own pin marker right now.
-      if (stale && !(record && record.row.dataset.tppNativePin === '1')) continue;
-
-      // The user has just unpinned this post: Teams' list has not caught up yet,
-      // and re-filing it here is the bar that refused to go away.
-      if (id && isRecentlyUnpinned(id)) continue;
-
-      // Keyed by post id, so one post can never grow two bars. The item's own
-      // words are kept with it: they are what finds the item again after Teams
-      // has re-rendered its list.
-      rememberNativePin(id ? 'pane:' + id : 'pane:item:' + hash(text), {
-        id,
-        text: record
-          ? headingOf(record.row) || record.row.dataset.tppSubject || subjectOf(record.row) || text
-          : text,
-        paneText: text,
-        author: record ? authorOf(record.row) || author : author,
-        paneItem: item
-      });
-    }
-
-    pinPaneLastSig = signature;
-    sweepNativePins(listed);
   }
 
   // ------------------------------------------------------------- row buttons
@@ -1903,7 +1731,7 @@
    * The Archive button sits in the left margin of the post and only appears
    * while the post is hovered or focused so the avatar stays clear.
    */
-  function injectActions(row, isArchived, nativePinned) {
+  function injectActions(row, isArchived) {
     let actions = row.querySelector('[data-tpp-ui="actions"]');
 
     if (!features.inboxZero) {
@@ -1939,21 +1767,13 @@
       });
       actions.append(archiveBtn);
     }
-    const pinnedNow = Boolean(nativePinned);
-    // A pinned post keeps no Archive button in the Inbox: its bar points at the
-    // post, and a post hidden in the Archive is a bar with nowhere to go. In the
-    // Archive it is just a filed post — its pin lives in the Inbox — so
-    // unfiling it is still on offer there.
-    archiveBtn.hidden = !features.inboxZero || (pinnedNow && view !== VIEW_ARCHIVES);
+    archiveBtn.hidden = !features.inboxZero;
     archiveBtn.disabled = false;
-    // An archived post reads as archived the same way a pinned one reads as
-    // pinned: a white icon in a filled purple circle. In the Archive that icon
-    // is a box with an arrow lifting out of it, so the button that puts the post
-    // back is never mistaken for the one that files it.
+    // An archived post reads as archived: a white icon in a filled purple circle.
     setButtonIcon(
       archiveBtn,
       isArchived ? 'filled' : 'outline',
-      isArchived ? ARCHIVE_UP_SVG : ARCHIVE_SVG
+      isArchived ? ARCHIVE_FILLED_SVG : ARCHIVE_SVG
     );
     const archiveLabel = archiveBtn.querySelector('.tpp-post-btn-label');
     const archiveText = isArchived ? 'Unarchive' : 'Archive';
@@ -1966,29 +1786,9 @@
     archiveBtn.classList.toggle('is-on', isArchived);
   }
 
-  /** True while Teams has this post pinned for the channel. */
-  function isPinnedPost(id) {
-    if (!id) return false;
-    const row = findRow(id);
-    return Boolean(row && row.dataset.tppNativePin === '1');
-  }
-
-  /**
-   * Marks one post read (archived) or unread (back in the Inbox).
-   *
-   * This is the only thing that changes a post's state after its first scan.
-   * Teams' own read receipt is not consulted, because it clears by itself a few
-   * seconds after the channel opens.
-   */
   function setRead(id, wantRead) {
     if (!id) return;
 
-    // A pinned post is the target of its bar, so it is never archived from
-    // under the bar: unpinning comes first.
-    if (wantRead && isPinnedPost(id)) {
-      toast('A post pinned for the channel stays put until it is unpinned.', anchorFor(id));
-      return;
-    }
     // The post is about to be hidden (or shown again), so the message keeps
     // hold of where it was: the news belongs on the post itself.
     const where = anchorFor(id);
@@ -1997,8 +1797,10 @@
       // The tag is what hides a post, so it is written once the post has left:
       // one that disappears in the same frame reads as a glitch, not an archive.
       const row = findRow(id);
+      const activity = row && first(S.messageBody, row) ? activityOf(row) : '';
+      const marker = row ? newMarkerOf(row) : '';
       animateOut(row ? [row] : [], 'right', () => {
-        remember(id, true);
+        remember(id, true, activity, marker);
         saveReadSoon();
         paintRead(id, true);
         scan();
@@ -2024,9 +1826,21 @@
    * `c` marks a decision the user made by hand, which is what the repair in
    * bootstrap keeps: an entry without it was inferred by an older build.
    */
-  function remember(id, isRead) {
+  function remember(id, isRead, activity, marker) {
     delete readState[id];
     readState[id] = { t: Date.now(), r: isRead ? 1 : 0, c: 1 };
+    // The badge showing at the moment of filing: the same badge later is not
+    // news, a different one is (see rebuildRows).
+    if (isRead && marker) readState[id].m = marker;
+    if (isRead) {
+      // The post as it stands the moment it is filed: anything later is news.
+      if (typeof activity === 'string' && activity) {
+        activityState[id] = activity;
+        saveActivitySoon();
+      }
+    } else {
+      delete activityState[id];
+    }
   }
 
   /**
@@ -2063,279 +1877,6 @@
     }, total);
   }
 
-  // ------------------------------------------------------------ pinned bars
-
-  /** Teams' own unpin control inside `root`, when it renders one there. */
-  function unpinAffordance(root) {
-    if (!root) return null;
-    const direct = first(S.unpinControl, root);
-    if (direct) return direct;
-
-    for (const el of root.querySelectorAll('button, [role="menuitem"], [role="button"]')) {
-      const text = `${el.getAttribute('aria-label') || ''} ${el.title || ''}`;
-      if (/unpin/i.test(text)) return el;
-    }
-    return null;
-  }
-
-  /**
-   * Whether this user may take a Teams pin down. Teams only renders its own
-   * unpin control for people allowed to pin in the channel, so its presence is
-   * the permission signal — in the post itself, or in the sidebar's pinned list.
-   * Without it the bar shows a plain pin that no hover or click will turn into
-   * an action, though it still jumps to the post.
-   */
-  function canUnpinNative(id, paneItem) {
-    if (unpinAffordance(findRow(id))) return true;
-    return Boolean(unpinAffordance(paneItem));
-  }
-
-  /**
-   * The bars: one per post a channel moderator has pinned for everyone.
-   *
-   * Teams' own pin is the only pin drawn. Teams++ adds none of its own, so the
-   * bars say exactly what Teams says the channel has pinned, and there is
-   * nothing of ours to keep in step with it.
-   */
-  function buildPinEntries() {
-    // Teams describes one pin twice: as an item in its sidebar list, and as a
-    // marker on the post itself. Both are filed under the same post id once the
-    // item is matched to its row, and the entry that carries the post's own
-    // words is the one kept — a bar with a body, never an empty copy of it
-    // beside it.
-    if (pinSwitchPending) return [];
-
-    const byPost = new Map();
-
-    for (const pin of nativePins.values()) {
-      // One channel's pins, always: a record read in another channel is never a
-      // bar here, whatever else survived.
-      if (pin.channel && pin.channel !== pinChannel) continue;
-      if (pin.id && isRecentlyUnpinned(pin.id)) continue;
-      const record = pin.id ? rowsById.get(pin.id) : null;
-      const entry = {
-        ...pin,
-        kind: 'native',
-        snippet: snippetOf(record?.row, pin.text)
-      };
-      // With no id yet, the words are the identity: the item and the row say the
-      // same subject, so they collapse to one bar even before they are matched.
-      const key = pin.id
-        ? `id:${pin.id}`
-        : `text:${collapse(pin.paneText || pin.text || '').toLowerCase()}`;
-      const held = byPost.get(key);
-      if (!held) {
-        byPost.set(key, entry);
-        continue;
-      }
-      // One record has the body (the post's own marker) and the other has the
-      // sidebar item (which is what opens the post): the bar keeps both.
-      if (!held.snippet && entry.snippet) {
-        byPost.set(key, {
-          ...entry,
-          paneItem: entry.paneItem || held.paneItem,
-          paneText: entry.paneText || held.paneText
-        });
-      } else {
-        if (!held.paneItem && entry.paneItem) held.paneItem = entry.paneItem;
-        if (!held.paneText && entry.paneText) held.paneText = entry.paneText;
-      }
-    }
-
-    // Read once the two records are merged: whether Teams offers its own unpin
-    // control can depend on the sidebar item the bar ended up with.
-    const entries = [...byPost.values()];
-    for (const entry of entries) entry.canUnpin = canUnpinNative(entry.id, entry.paneItem);
-    return entries;
-  }
-
-  /**
-   * Remembers an unpin, so the bar cannot be rebuilt from what Teams still lists.
-   *
-   * `ms` is the length of the hold: the user's own unpin is held for a minute,
-   * because it is certain. One read from Teams' own markers gets a short hold —
-   * long enough to outlast a sidebar that has not caught up, short enough that a
-   * re-render read the wrong way can repair itself.
-   */
-  function holdUnpinned(id, ms) {
-    if (!id) return;
-    const ttl = ms || UNPIN_HOLD;
-    const held = recentUnpins.get(id);
-    const now = Date.now();
-    // A longer hold already running is never shortened: the user's own unpin
-    // must not be downgraded by the scan that notices Teams catching up.
-    if (held && held.at + held.ttl - now >= ttl) return;
-    recentUnpins.set(id, { at: now, ttl });
-  }
-
-  function isRecentlyUnpinned(id) {
-    const held = recentUnpins.get(id);
-    if (!held) return false;
-    if (Date.now() - held.at < held.ttl) return true;
-    recentUnpins.delete(id);
-    return false;
-  }
-
-  /** A pin's stable name: one post can only ever have one bar. */
-  function pinKey(entry) {
-    if (entry.id) return `${entry.kind}:${entry.id}`;
-    return `${entry.kind}:text:${collapse(entry.text || entry.author || '').toLowerCase()}`;
-  }
-
-  /** The pin each bar currently stands for, so a re-render never loses its post. */
-  const pinEntryOf = new WeakMap();
-  /** The box the bars are anchored to, kept until it leaves the page. */
-  let pinAnchorEl = null;
-  /** Whether a bar has been placed at all, so a transient gap cannot hide it. */
-  let pinPlaced = false;
-  /** A route key read once and not yet acted on (see syncPinChannel). */
-  let pinChannelNext = '';
-  /**
-   * True while the channel on screen is not the one the pin records were read
-   * in. No record is read or drawn in that state: a channel's pins are its own,
-   * and a bar from the channel before it must never appear in the next one.
-   */
-  let pinSwitchPending = false;
-  /** Until when the pinned sidebar is still catching up with the new channel. */
-  let pinSettleUntil = 0;
-  /** The sidebar's words as of the last harvest, to spot a pane that never changed. */
-  let pinPaneLastSig = '';
-  /** The signature the sidebar had before the channel changed. */
-  let pinPaneStaleSig = '';
-  /** Follow-up scans asked for while that old pane is still on screen. */
-  let pinPaneStaleTries = 0;
-  /** When the message list first went missing, in ms, or 0 while it is there. */
-  let listMissingAt = 0;
-  /** When the verdict first said "not a channel", in ms, or 0 while it says yes. */
-  let notChannelAt = 0;
-
-  /**
-   * One pinned post: a purple bar that takes the user to the post where it sits
-   * in the stream. The bar keeps the pinned area compact and never moves or
-   * copies the post, so everything inside it stays Teams' own.
-   */
-  function pinBar(entry) {
-    const item = document.createElement('div');
-    item.className = `tpp-pin-item tpp-pin-item--${entry.kind}`;
-    item.dataset.tppUi = 'pin-bar';
-    item.dataset.tppKey = pinKey(entry);
-    pinEntryOf.set(item, entry);
-
-    const bar = document.createElement('button');
-    bar.type = 'button';
-    bar.className = 'tpp-pin-bar';
-    bar.dataset.tppUi = 'pin-summary';
-    bar.title = 'Open this pinned post in the channel';
-
-    const title = document.createElement('span');
-    title.className = 'tpp-pin-bar-title';
-    title.textContent = `${entry.author ? `${entry.author}: ` : ''}${entry.text || 'Pinned post'}`;
-
-    const snippet = document.createElement('span');
-    snippet.className = 'tpp-pin-bar-snippet';
-    snippet.textContent = entry.snippet || '';
-
-    bar.append(title, snippet);
-
-    bar.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      // The entry is re-read at click time: a scan may have refreshed it since
-      // the bar was built.
-      const host = event.currentTarget.closest('.tpp-pin-item');
-      jumpToPin((host && pinEntryOf.get(host)) || entry, bar);
-    });
-
-    const unpin = pinUnpinButton(entry);
-    if (unpin) item.append(unpin);
-    item.append(bar);
-    return item;
-  }
-
-  /**
-   * The bar's own unpin button, on its left: taking a pin down is the thing
-   * people do most from the bar, so it is a click, not a trip to the post.
-   */
-  function pinUnpinButton(entry) {
-    if (!entry.canUnpin) return null;
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'tpp-pin-unpin';
-    button.dataset.tppUi = 'unpin';
-    button.dataset.tppUnpin = 'native';
-    button.title = 'Unpin this post for everyone';
-    button.setAttribute('aria-label', button.title);
-    button.innerHTML = PIN_FILLED_SVG;
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      unpinNative(entry.id);
-    });
-    return button;
-  }
-
-  /** Brings an existing bar up to date in place, without rebuilding it. */
-  function updatePinItem(item, entry) {
-    pinEntryOf.set(item, entry);
-
-    const title = item.querySelector('.tpp-pin-bar-title');
-    const unpin = item.querySelector('.tpp-pin-unpin');
-    const wantedUnpin = entry.canUnpin ? 'native' : '';
-    if ((unpin ? unpin.dataset.tppUnpin : '') !== wantedUnpin) {
-      unpin?.remove();
-      const fresh = pinUnpinButton(entry);
-      if (fresh) item.insertBefore(fresh, item.firstChild);
-    }
-
-    const snippet = item.querySelector('.tpp-pin-bar-snippet');
-    const nextTitle = `${entry.author ? `${entry.author}: ` : ''}${entry.text || 'Pinned post'}`;
-    if (title && title.textContent !== nextTitle) title.textContent = nextTitle;
-    if (snippet && snippet.textContent !== (entry.snippet || '')) {
-      snippet.textContent = entry.snippet || '';
-    }
-  }
-
-  // ------------------------------------------------------- pinned post jump
-
-  /**
-   * The post a pin points at. Its id is tried first; if Teams has re-rendered
-   * the row since it was tagged, Teams' own id anchors and finally the pin's
-   * own words are used, so a post that is on the page is always found.
-   */
-  function resolveRow(entry) {
-    if (!entry) return null;
-
-    if (entry.id) {
-      const byId = findRow(entry.id);
-      if (byId) return byId;
-
-      // Tagging runs on a debounce; Teams' own anchors are there immediately.
-      const raw = entry.id.startsWith('m:') ? entry.id.slice(2) : entry.id;
-      for (const name of ['data-mid', 'data-message-id', 'data-item-id']) {
-        let found = null;
-        try {
-          found = document.querySelector(`[${name}="${CSS.escape(raw)}"]`);
-        } catch (_) {
-          continue;
-        }
-        if (found) return found.closest('.tpp-post') || found;
-      }
-    }
-
-    // A pin whose id Teams no longer exposes: match it on its own words.
-    const record = pinnedSidebarPost(entry.text || '', entry.author || '');
-    return record ? record.row : null;
-  }
-
-  /**
-   * Presses an element the way a pointer does.
-   *
-   * Teams' controls answer to the pointer events as well as to the click, and a
-   * bare `.click()` is ignored by some of them, so the whole sequence is sent in
-   * the order a real pointer sends it. Nothing is prevented: Teams gets every
-   * event.
-   */
   function pressElement(el, at = {}) {
     if (!el) return;
     const base = { bubbles: true, cancelable: true, composed: true, view: window, ...at };
@@ -2356,575 +1897,6 @@
     fire('click', window.MouseEvent, { button: 0, detail: 1 });
   }
 
-  /**
-   * Takes the user to a pinned post in the channel.
-   *
-   * A pin is a pointer at a post, not a copy of it: the bar unfolds the post in
-   * the channel and lines its top up with the top of the scroll area. Nothing
-   * about the post is moved, so its replies, reactions, reply box and menus are
-   * Teams' own.
-   *
-   * Teams only keeps the posts it has rendered, so an old pin may not be in the
-   * page at all. Rather than telling the user to scroll and find it, the list is
-   * walked back through its history until the post appears (findPinnedPost).
-   */
-  function jumpToPin(entry, opener) {
-    if (!entry) return;
-
-    const row = resolveRow(entry);
-    if (row) {
-      revealPost(row);
-      return;
-    }
-    // A new bar abandons a search already running.
-    if (pinJump) cancelPinSearch();
-    findPinnedPost(entry, opener || null);
-  }
-
-  /**
-   * Walks the message list through its history until the pin's post is loaded,
-   * then scrolls to it.
-   *
-   * Teams fetches older posts when its list is pushed against the top, so the
-   * walk goes up a screen at a time and lets Teams render each batch before
-   * looking again. Channels can be sorted either way, so it tries downwards as
-   * well, and it puts the list back where the user had it if the post is gone.
-   */
-  /** Resolves once `check` is true, or after `ms` at the latest. */
-  function waitFor(check, ms) {
-    return new Promise((resolve) => {
-      const started = Date.now();
-      const tick = () => {
-        if (check() || Date.now() - started >= ms) {
-          resolve();
-          return;
-        }
-        setTimeout(tick, 60);
-      };
-      tick();
-    });
-  }
-
-  /**
-   * Walks the message list through the channel until the pin's post is loaded,
-   * then scrolls to it.
-   *
-   * Teams loads older posts when its list is pushed at its edge, so once the
-   * walk reaches the top it keeps pushing there to ask for the next batch, and
-   * it waits for the list to actually grow instead of for a fixed delay. That
-   * is what lets it reach a post dozens of batches back. A few batches in a row
-   * that bring nothing new end it, and a button in the corner abandons it.
-   */
-  async function findPinnedPost(entry, opener) {
-    const list = lastList || findMessageList();
-    if (!list) {
-      toast('Open the pinned post from “In this channel” — Teams is not showing the list.');
-      return;
-    }
-
-    pinJump = { entry, list, startTop: list.scrollTop, opener };
-    showSearchCancel();
-    toast('Finding that pinned post…');
-
-    // Up first: channels list the newest post last, so older ones are above.
-    if (await walkForPin(entry, list, -1, 20000)) return;
-    if (!pinJump) return; // Cancelled.
-
-    // Nothing above, so the channel may be sorted the other way.
-    if (await walkForPin(entry, list, 1, 8000)) return;
-    if (!pinJump) return; // Cancelled.
-
-    const startTop = pinJump.startTop;
-    pinJump = null;
-    hideSearchCancel();
-    if (list.isConnected) list.scrollTop = startTop;
-    toast('Teams is not loading that pinned post — try it again in a moment.');
-  }
-
-  /**
-   * One direction of the search: true when the post was found and revealed,
-   * false when it ran out of history or the user cancelled.
-   */
-  async function walkForPin(entry, list, direction, budgetMs) {
-    const deadline = Date.now() + budgetMs;
-    let idle = 0;
-
-    while (pinJump && Date.now() < deadline) {
-      const found = resolveRow(entry);
-      if (found) {
-        pinJump = null;
-        hideSearchCancel();
-        revealPost(found);
-        return true;
-      }
-
-      const before = list.scrollHeight;
-      const step = Math.round(list.clientHeight * 1.5);
-      const atEdge =
-        direction < 0
-          ? list.scrollTop <= 2
-          : list.scrollTop + list.clientHeight >= list.scrollHeight - 2;
-
-      list.scrollTop =
-        direction < 0
-          ? Math.max(0, list.scrollTop - step)
-          : Math.min(list.scrollHeight, list.scrollTop + step);
-
-      // Being at the edge is the request for the next batch, so wait for the
-      // list to grow rather than stepping straight past an empty answer.
-      await waitFor(
-        () => !pinJump || list.scrollHeight > before + 8 || Boolean(resolveRow(entry)),
-        atEdge ? 900 : 400
-      );
-      if (!pinJump) return false;
-
-      if (list.scrollHeight > before + 8) {
-        idle = 0;
-        continue;
-      }
-      if (!atEdge) continue;
-      // A batch can arrive a couple of beats late; six empty ones mean the
-      // channel has no more history to give in this direction.
-      idle += 1;
-      if (idle >= 6) return false;
-    }
-    return false;
-  }
-
-  /** The button that abandons a pinned-post search, bottom centre. */
-  function showSearchCancel() {
-    if (searchCancelBtn) return;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'tpp-search-cancel';
-    button.dataset.tppUi = 'search-cancel';
-    button.textContent = 'Stop searching for this pin';
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      cancelPinSearch();
-    });
-    document.body.append(button);
-    searchCancelBtn = button;
-  }
-
-  function hideSearchCancel() {
-    searchCancelBtn?.remove();
-    searchCancelBtn = null;
-  }
-
-  /** Stops a running search and puts the channel back where it was. */
-  function cancelPinSearch() {
-    if (!pinJump) {
-      hideSearchCancel();
-      return;
-    }
-    const { list, startTop } = pinJump;
-    pinJump = null;
-    hideSearchCancel();
-    if (list && list.isConnected) list.scrollTop = startTop;
-    toast('Search stopped.');
-  }
-
-  /**
-   * Opens one post: its card unfolds into the whole post, and the list goes
-   * straight to it.
-   *
-   * A bar is a shortcut to a post, so it opens the post rather than pointing at
-   * a folded card the user then has to click — and it does so with no flash or
-   * highlight, because the post itself is the answer. An archived post is shown
-   * first, because the Inbox filter hides it and there is nothing to scroll to
-   * while it is hidden.
-   */
-  function revealPost(row) {
-    const id = row.dataset.tppId;
-    if (id && isReadPost(id) && view !== VIEW_ARCHIVES) setView(VIEW_ARCHIVES);
-
-    // Unfolded, not toggled: a post that is already open stays open. The row is
-    // re-laid out here so the whole post is on screen before the list moves to
-    // it, not after — and it takes focus, so the keyboard acts on the post that
-    // was just opened.
-    if (id && features.compactPosts) {
-      const opening = !unfolded.has(id);
-      if (opening) {
-        unfolded.add(id);
-        row.classList.add('tpp-unfold');
-        reposition();
-      }
-      // Opened by the bar, the post is activated as if it had been clicked, so
-      // Teams' shortcuts act on it without a second click.
-      if (opening) activatePost(row);
-      else focusPostMessage(row);
-    }
-
-    alignPostTop(row);
-  }
-
-  /**
-   * Lines one post up with the top of the scroll area, in a single move.
-   *
-   * A pinned post is read from its first line down, so its top goes to the top of
-   * the list: no half screen of the post above the one that was asked for, and
-   * nothing left over below.
-   */
-  function scrollPostToTop(row) {
-    const list = lastList || findMessageList();
-    if (!list) {
-      try {
-        row.scrollIntoView({ block: 'start', inline: 'nearest' });
-      } catch (_) {
-        // Nothing to measure: the browser's own jump is all there is.
-      }
-      return;
-    }
-
-    const delta = row.getBoundingClientRect().top - list.getBoundingClientRect().top;
-    if (Math.abs(delta) > 1) list.scrollTop += delta;
-  }
-
-  /**
-   * Keeps a post at the top while Teams finishes moving the list.
-   *
-   * Pressing Teams' own pinned item also scrolls the list to the post, and Teams
-   * chooses where that lands — often the middle. The alignment is repeated over
-   * the next half second so Teams' own move is the one that gives way, and a
-   * newer jump cancels the older attempts.
-   */
-  function alignPostTop(row) {
-    if (!row) return;
-    const token = ++pinAlignToken;
-    const step = () => {
-      if (token !== pinAlignToken || !row.isConnected) return;
-      scrollPostToTop(row);
-    };
-    step();
-    requestAnimationFrame(step);
-    window.setTimeout(step, 120);
-    window.setTimeout(step, 300);
-    window.setTimeout(step, 600);
-  }
-
-  /**
-   * Teams' own "Post in channel" box, when it is on screen.
-   *
-   * Teams puts the composer at the top of the posts area, above the list, so
-   * that box is where the area begins as far as the eye is concerned. A composer
-   * that lives inside the list is skipped: it scrolls with the posts, and room
-   * reserved there would scroll away with it.
-   */
-  function composeBox() {
-    for (const selector of S.newPostBox || []) {
-      let found = null;
-      try {
-        found = document.querySelector(selector);
-      } catch (_) {
-        continue; // A bad selector from a hand edit should not stop the rest.
-      }
-      if (!found || !found.getClientRects().length) continue;
-      if (lastList && lastList.contains(found)) continue;
-      return found;
-    }
-    return null;
-  }
-
-  /**
-   * Reserves the room the bars take, on the box whose top they cover.
-   *
-   * With a composer on screen that is the composer's own top padding: the bars
-   * sit above "Post in channel" and its content starts below them, so nothing of
-   * Teams' is covered. Without one the list keeps the room as its own padding
-   * (applyTopInset). Written only when it actually changed.
-   */
-  function applyPinInset(box, px) {
-    if (!box) return;
-    if (box.dataset.tppPinApplied !== '1') {
-      box.dataset.tppPinInline = box.style.paddingTop || '';
-      box.dataset.tppPinBase = getComputedStyle(box).paddingTop;
-      box.dataset.tppPinApplied = '1';
-    }
-    const base = parseFloat(box.dataset.tppPinBase) || 0;
-    const value = `${Math.max(base + px, 0)}px`;
-    if (box.style.paddingTop !== value) box.style.paddingTop = value;
-  }
-
-  /** Gives the room the bars took back to Teams' own box. */
-  function clearPinInset() {
-    const box = pinHost;
-    pinHost = null;
-    pinAnchorEl = null;
-    pinPlaced = false;
-    if (!box || box.dataset.tppPinApplied !== '1') return;
-    box.style.paddingTop = box.dataset.tppPinInline || '';
-    delete box.dataset.tppPinInline;
-    delete box.dataset.tppPinBase;
-    delete box.dataset.tppPinApplied;
-  }
-
-  /**
-   * The posts area: the box that holds Teams' own composer and the list.
-   *
-   * The bars sit at its top edge — just under the channel's tab strip — and the
-   * room they take goes on that box's own padding, so the composer and the posts
-   * both start below them. Anchoring to the composer alone was not stable: Teams
-   * replaces that box freely, and a bar positioned against one that had gone
-   * moved with it.
-   *
-   * A box much larger than the posts is the app's own layout, not the area, and
-   * padding it would push the whole page down; the list is the answer then.
-   */
-  function pinArea(list, box) {
-    if (!list) return null;
-    if (!box) return list;
-
-    const listRect = list.getBoundingClientRect();
-    for (let node = list.parentElement; node && node !== document.body; node = node.parentElement) {
-      if (!node.contains(box)) continue;
-      const rect = node.getBoundingClientRect();
-      if (rect.height > listRect.height + 320 || rect.width > listRect.width + 240) return list;
-      return node;
-    }
-    return list;
-  }
-
-  /**
-   * The width a bar takes: one post's, not the whole pane's.
-   *
-   * Teams' message list can be far wider than the posts drawn in it, so a bar
-   * sized to the list ran on past the post it belonged to. The first post with a
-   * box of its own is the measure; the list is only the fallback for a view with
-   * nothing on show.
-   */
-  function barBox(list) {
-    const listRect = list.getBoundingClientRect();
-    for (const row of list.querySelectorAll('.tpp-post')) {
-      if (!row.getClientRects().length) continue;
-      const rect = row.getBoundingClientRect();
-      if (rect.width > 120 && rect.height > 0) return rect;
-    }
-    return { left: listRect.left + 12, width: Math.max(listRect.width - 24, 200) };
-  }
-
-  /**
-   * The bars float over the top of the posts area, above Teams' own composer.
-   *
-   * They are anchored to the window, never inserted into the list: that is
-   * Teams' scroll box, so a bar put inside it belongs to the content and scrolls
-   * away. They are as wide as a post, and the room they need is added to the
-   * area's padding so nothing of Teams' is covered.
-   *
-   * Returns the padding the list still owes the bars: their height when the list
-   * is the area itself (scan folds that into applyTopInset with the tabs), and
-   * nothing when the area has already taken it.
-   */
-  function placePinStack(stack, list) {
-    if (!stack || !list) return null;
-
-    if (stack.parentElement !== document.body) document.body.append(stack);
-    stack.style.display = '';
-
-    const listRectNow = list.getBoundingClientRect();
-    // The list has not been laid out yet. A bar that is already placed is left
-    // exactly where it is: hiding it for one pass and putting it back is the
-    // blink, and a list is briefly unmeasurable every time Teams swaps a batch
-    // of posts in.
-    if (listRectNow.width < 120) {
-      if (!pinPlaced) stack.style.display = 'none';
-      return null;
-    }
-
-    const post = barBox(list);
-    const height = Math.ceil(stack.getBoundingClientRect().height || stack.scrollHeight || 0) || 30;
-
-    // The box the bars are anchored to is decided once and kept: choosing again
-    // on every scan let a composer that Teams mounts and unmounts move the bars
-    // between two positions, which is the blink itself. It is forgotten when it
-    // leaves the page (see clearPinInset).
-    let area = null;
-    if (pinAnchorEl && pinAnchorEl.isConnected && pinAnchorEl.contains(list)) {
-      area = pinAnchorEl;
-    } else {
-      area = pinArea(list, composeBox()) || list;
-      pinAnchorEl = area;
-    }
-    const areaRect = area.getBoundingClientRect();
-
-    if (area !== list) {
-      if (pinHost && pinHost !== area) clearPinInset();
-      pinHost = area;
-      applyPinInset(area, height + 10);
-    } else if (pinHost) {
-      clearPinInset();
-    }
-    // Kept for the next scan even when cleaning restored a previous box: the
-    // choice is what has to be stable, not the padding bookkeeping.
-    pinAnchorEl = area;
-    pinPlaced = true;
-
-    stack.style.position = 'fixed';
-    stack.style.top = `${Math.max(areaRect.top + 4, 0)}px`;
-    stack.style.bottom = 'auto';
-    stack.style.left = `${Math.max(post.left, areaRect.left + 4)}px`;
-    stack.style.width = `${Math.min(post.width, areaRect.width)}px`;
-    stack.style.right = 'auto';
-
-    return area === list ? height + 10 : 0;
-  }
-
-  /**
-   * Draws the bars now, without waiting for a scan.
-   *
-   * A pin is a direct answer to a click, and a scan stands down while a draft is
-   * open or while Teams shows one of its own post panes — which is when the bar
-   * would otherwise not appear at all. This reconciles the same stack renderPins
-   * builds, so the cost is one pass over the pins.
-   */
-  function refreshPins() {
-    // A draft is open: nothing of ours touches the page until it is gone (see
-    // composerOpen). The next scan draws the bar as soon as it is sent.
-    if (composerOpen()) return null;
-    const list = lastList || findMessageList();
-    if (!list) return null;
-    try {
-      return renderPins(list);
-    } catch (_) {
-      return null; // A bar never takes the click that asked for it down with it.
-    }
-  }
-
-  function renderPins(list) {
-    const existing = document.getElementById(STACK_ID);
-    // Pinning is an Inbox feature: the bars belong to the Inbox, and the Archive
-    // is where filed posts are looked through. Drawing them over the Archive put
-    // a pinned post's bar above a list it is not part of.
-    // Bars are the Inbox's, and the Inbox's panel has to be the one on show:
-    // a mounted-but-hidden list put them over whatever tab was in front.
-    const allow =
-      features.pinnedMessages &&
-      view !== VIEW_ARCHIVES &&
-      postsPanelShown() &&
-      !pinSwitchPending;
-    const entries = allow ? buildPinEntries() : [];
-
-    if (!list || entries.length === 0) {
-      // A bar is not taken down the instant its entry is missing: Teams drops and
-      // re-renders rows as batches load, and a bar that goes and comes back with
-      // each one is the blink. The stack is removed only once the emptiness has
-      // lasted — at once when the feature itself was switched off.
-      if (existing && list && allow && !explicitPinChange) {
-        const now = Date.now();
-        if (!emptyPinsAt) emptyPinsAt = now;
-        if (now - emptyPinsAt < 800) return null;
-      }
-      explicitPinChange = false;
-      emptyPinsAt = 0;
-      existing?.remove();
-      // The room reserved for the bars goes back to Teams' composer.
-      clearPinInset();
-      return null;
-    }
-    emptyPinsAt = 0;
-
-    let stack = existing;
-    if (!stack) {
-      stack = document.createElement('div');
-      stack.id = STACK_ID;
-      stack.className = 'tpp-pin-stack';
-      stack.dataset.tppUi = 'pin-stack';
-      stack.setAttribute('role', 'list');
-      stack.setAttribute('aria-label', 'Pinned posts');
-      document.body.append(stack);
-    }
-
-    // Reconcile bar by bar. Rebuilding the stack replaces the item a post was
-    // opened into, so any Teams re-render closed it again; keeping the items
-    // means an opened post survives every scan untouched.
-    const existingItems = new Map();
-    for (const item of Array.from(stack.children)) {
-      if (item.classList && item.classList.contains('tpp-pin-item')) {
-        existingItems.set(item.dataset.tppKey, item);
-      }
-    }
-
-    const keep = [];
-    const wanted = new Set();
-    const leftovers = [...existingItems.values()];
-
-    for (const entry of entries) {
-      const key = pinKey(entry);
-      if (wanted.has(key)) continue; // One bar per post, always.
-      wanted.add(key);
-
-      let item = existingItems.get(key);
-      if (item) {
-        updatePinItem(item, entry);
-        keep.push(item);
-        continue;
-      }
-
-      // An entry can change its own key — a moderator's pin gains its post id once
-      // the post is rendered, and a bar's wording can change — and dropping the
-      // old bar for it made one bar blink out while the others stayed. An unwanted
-      // bar of the same kind is reused for the entry that replaced it instead, so
-      // the element on screen never goes away and comes back.
-      const reuse = leftovers.find(
-        (left) =>
-          !keep.includes(left) &&
-          !wanted.has(left.dataset.tppKey || '') &&
-          (left.dataset.tppKey || '').startsWith(`${entry.kind}:`)
-      );
-      if (reuse) {
-        for (const [oldKey, held] of existingItems) {
-          if (held === reuse) existingItems.delete(oldKey);
-        }
-        reuse.dataset.tppKey = key;
-        existingItems.set(key, reuse);
-        updatePinItem(reuse, entry);
-        keep.push(reuse);
-        continue;
-      }
-
-      const fresh = pinBar(entry);
-      stack.append(fresh);
-      keep.push(fresh);
-    }
-
-    for (const item of leftovers) {
-      if (keep.includes(item)) continue;
-      item.remove();
-    }
-
-    keep.forEach((item, index) => {
-      if (stack.children[index] !== item) stack.insertBefore(item, stack.children[index] || null);
-    });
-
-    return placePinStack(stack, list);
-  }
-
-  /**
-   * The tabs and pinned bars float over the top of the list. A matching
-   * padding-top keeps the first post readable, without changing Teams' own
-   * padding permanently.
-   */
-  function applyTopInset(list, px) {
-    if (!list) return;
-    if (list.dataset.tppPadApplied !== '1') {
-      list.dataset.tppPadInline = list.style.paddingTop || '';
-      list.dataset.tppPadBase = getComputedStyle(list).paddingTop;
-      list.dataset.tppPadApplied = '1';
-    }
-    const base = parseFloat(list.dataset.tppPadBase) || 0;
-    const value = `${Math.max(base + px, 0)}px`;
-    if (list.style.paddingTop !== value) list.style.paddingTop = value;
-  }
-
-  /**
-   * Gives the post buttons a margin to float in without moving a single post.
-   *
-   * The list gains padding on the left and takes the same amount back off its
-   * own left margin, so its content stays exactly where Teams put it while the
-   * gutter appears in the margin beside it. Padding alone would push every post
-   * right, which is what this replaces.
-   */
   function applyLeftInset(list) {
     if (!list) return;
     if (list.dataset.tppLeftApplied !== '1') {
@@ -2976,42 +1948,12 @@
     delete target.dataset.tppPadBase;
   }
 
-
-  function unpinNative(id) {
-    const row = findRow(id);
-    if (!row) {
-      toast('Open the post in the channel to unpin it.');
-      return;
-    }
-
-    // The bar goes as soon as the request is made: keeping the entry would put
-    // it back on the next scan, and Teams' own marker — still on the row and
-    // still in its sidebar list — would be read back as a fresh pin.
-    forgetNativePin(id);
-    holdUnpinned(id);
-    explicitPinChange = true;
-
-    const where = anchorFor(id);
-    const control = unpinAffordance(row);
-    if (control) {
-      control.click();
-      repaintPinned(id);
-      refreshPins();
-      toast('Asked Teams to unpin this post.', where);
-      return;
-    }
-
-    repaintPinned(id);
-    refreshPins();
-    toast('This post is pinned in Teams. Use the post’s ⋯ menu to unpin it.', where);
-  }
-
   // ------------------------------------------------------------------- jump
 
   function findRow(id) {
     if (!id) return null;
-    // Only posts: a pinned bar carries the same id so it can find its post, and
-    // must never be mistaken for the post itself.
+    // Only posts: a pane's copy of a post carries the same id and is never the
+    // post this scan filed.
     for (const el of document.querySelectorAll('.tpp-post[data-tpp-id]')) {
       if (el.dataset.tppId === id) return el;
     }
@@ -3062,6 +2004,7 @@
 
     if (changing) {
       view = next;
+      document.documentElement?.setAttribute('data-tpp-view', view);
       writeSync({ [VIEW_KEY]: view });
     }
 
@@ -3477,10 +2420,23 @@
    * tab. The selected tab is asked for, and the list has to actually be on
    * screen rather than merely present.
    */
+  /** Has the user selected another native Teams tab like Files, Notes, etc.? */
+  function otherTabSelected() {
+    for (const tab of document.querySelectorAll('[role="tab"]')) {
+      if (tab.closest('#' + TABS_ID)) continue;
+      if (tab === hiddenNativeTab || tab === nativePostsTab()) continue;
+      if (tab.matches('[value*="posts" i], [id*="posts" i], [data-tid*="posts" i]')) continue;
+      if (tab.getAttribute('aria-selected') === 'true') return true;
+    }
+    return false;
+  }
+
   /** Is the channel's own Posts tab the selected one? */
   function postsTabSelected() {
+    if (otherTabSelected()) return false;
+    if (document.getElementById(TABS_ID)) return true;
     const posts = nativePostsTab();
-    return Boolean(posts) && posts.getAttribute('aria-selected') !== 'false';
+    return !posts || posts.getAttribute('aria-selected') !== 'false';
   }
 
   function postsPanelShown(list) {
@@ -3490,9 +2446,9 @@
     if (!target) return false;
     if (target.getClientRects().length) return true;
 
-    // The list itself can be a `display: contents` box with no rect of its own:
-    // the panel around it is then the thing that decides.
-    const panel = target.closest('[role="tabpanel"], [data-tid*="channel-pane" i]');
+    // The list itself can be a `display: contents` box or collapsed with no rect of its own:
+    // the panel or container around it is then the thing that decides.
+    const panel = target.closest('[role="tabpanel"], [data-tid*="channel-pane" i], main');
     return Boolean(panel && panel.getClientRects().length);
   }
 
@@ -3505,26 +2461,16 @@
       return;
     }
 
-    // Teams is still fetching: a stand-in row on screen means what is here is
-    // not this channel's whole Inbox yet, so the sign would be premature.
-    const loading = Array.from(list.querySelectorAll('[data-tpp-placeholder]')).some(
-      (el) => !el.closest('.tpp-post') && el.getClientRects().length > 0
-    );
-    if (loading) {
-      existing?.remove();
-      return;
-    }
-
     const records = Array.from(rowsById.values());
+    const unread = records.filter((record) => !record.read).length;
     const read = records.filter((record) => record.read).length;
 
     let kind = null;
     if (view === VIEW_ARCHIVES) {
-      kind = records.length > 0 && read === 0 ? 'no-archives' : null;
+      kind = read === 0 ? 'no-archives' : null;
     } else {
-      // Inbox only, and only when nothing this channel has shown is unread.
-      const anyUnread = records.some((record) => !record.read);
-      kind = view === VIEW_INBOX && records.length > 0 && !anyUnread ? 'zero' : null;
+      // Whenever there are no unread posts in the inbox -> Inbox Zero!
+      kind = view === VIEW_INBOX && unread === 0 ? 'zero' : null;
     }
 
     if (!kind) {
@@ -3641,7 +2587,16 @@
    * it to the list's width; otherwise it is anchored to the right edge.
    */
   function anchor(el, list, options) {
-    const rect = list.getBoundingClientRect();
+    let rect = list.getBoundingClientRect();
+    if (rect.width < 120 || rect.height < 80) {
+      const container = list.closest(
+        '[data-tid="message-pane-list-viewport"], [role="tabpanel"], [data-tid*="channel-pane" i], main'
+      );
+      if (container) {
+        const crect = container.getBoundingClientRect();
+        if (crect.width >= 120 && crect.height >= 80) rect = crect;
+      }
+    }
     if (rect.width < 120 || rect.height < 80) {
       el.style.display = 'none';
       return;
@@ -3678,12 +2633,8 @@
   }
 
   /**
-   * A status message: a larger, translucent card dead centre on the page.
-   *
-   * It is a status of the page, not of a row, so it does not move with the list
-   * and does not appear somewhere different for the same action depending on
-   * what happens to be on screen. `anchor` is still accepted by callers but no
-   * longer moves the message; see placeToast.
+   * A status message: a larger, translucent card centred over the post div
+   * that was just acted on, or dead centre over the posts list.
    */
   function toast(message, anchor) {
     let el = document.getElementById(TOAST_ID);
@@ -3698,7 +2649,7 @@
     }
 
     el.textContent = message;
-    placeToast(el);
+    placeToast(el, anchor);
 
     // Restart the entrance, so a second message in a row is noticed.
     el.classList.remove('is-on');
@@ -3712,35 +2663,49 @@
   }
 
   /**
-   * Puts the status message in the middle of the posts, and the middle of the
-   * page.
-   *
-   * Horizontally it belongs over the post column, not over the window: Teams
-   * keeps its channel list on the left, so the centre of the screen sits to the
-   * left of the posts and a card there reads as belonging to the sidebar. A post
-   * row is the line asked for, and its rect already carries the gutter inset, so
-   * the list is only a fallback for a channel with nothing rendered in it.
-   *
-   * Vertically it is the middle of the page, and the card is fixed, so a scroll
-   * under it moves nothing.
+   * Puts the status message in the middle of the post div if an anchor is given,
+   * otherwise horizontally centred over the post column and vertically in the middle.
    */
-  function placeToast(el) {
-    let box = null;
+  function placeToast(el, anchor) {
+    let rect = null;
 
-    if (lastList && lastList.isConnected) {
-      const row = lastList.querySelector('.tpp-post');
-      const rect = row ? row.getBoundingClientRect() : null;
-      if (rect && rect.width > 40) box = rect;
+    if (anchor) {
+      if (anchor.row && anchor.row.isConnected) {
+        rect = anchor.row.getBoundingClientRect();
+      } else if (anchor.rect) {
+        rect = anchor.rect;
+      } else if (anchor instanceof Element && anchor.isConnected) {
+        rect = anchor.getBoundingClientRect();
+      } else if (typeof anchor.getBoundingClientRect === 'function') {
+        rect = anchor.getBoundingClientRect();
+      }
     }
 
-    if (!box) {
+    if (!rect || rect.width < 10 || rect.height < 10) {
+      if (lastList && lastList.isConnected) {
+        const row = lastList.querySelector('.tpp-post');
+        const r = row ? row.getBoundingClientRect() : null;
+        if (r && r.width > 40) rect = r;
+      }
+    }
+
+    if (!rect || rect.width < 10) {
       const list = lastList && lastList.isConnected ? lastList : findMessageList();
-      const rect = list ? list.getBoundingClientRect() : null;
-      if (rect && rect.width > 40) box = rect;
+      const r = list ? list.getBoundingClientRect() : null;
+      if (r && r.width > 40) rect = r;
     }
 
-    el.style.left = box ? `${Math.round(box.left + box.width / 2)}px` : '50%';
-    el.style.top = '50%';
+    if (rect) {
+      const cx = Math.round(rect.left + rect.width / 2);
+      const cy = Math.round(rect.top + rect.height / 2);
+      const clampedX = Math.max(120, Math.min(window.innerWidth - 120, cx));
+      const clampedY = Math.max(80, Math.min(window.innerHeight - 80, cy));
+      el.style.left = `${clampedX}px`;
+      el.style.top = `${clampedY}px`;
+    } else {
+      el.style.left = '50%';
+      el.style.top = '50%';
+    }
   }
 
   function reposition() {
@@ -3758,9 +2723,6 @@
 
       listRect = list.getBoundingClientRect();
 
-      const stack = document.getElementById(STACK_ID);
-      if (stack) placePinStack(stack, list);
-
       const empty = document.getElementById(EMPTY_ID);
       if (empty) anchor(empty, list, { top: 18, full: true, matchHeight: true });
 
@@ -3774,186 +2736,57 @@
   // ------------------------------------------------------ which channel this is
 
   /**
-   * The channel a pin belongs to.
-   *
-   * A pin made in a channel belongs to that channel alone, including channels
-   * in another team, so the key has to name the channel and the team it sits in:
-   * Teams writes both in its route (`/l/channel/<id>/<name>`, with the team as
-   * `groupId`). A route that names no channel is keyed by its own path instead
-   * of by the channel read before it. That fallback mattered: returning the
-   * previous key whenever an unrecognised route came up put every such channel
-   * into one bucket, so the bars of the last channel were shown in all of them.
-   */
-  /**
    * The channel name Teams prints above the posts, when it is on screen.
    *
    * The URL is no help in this Teams build: it stays at the root for every
    * channel, so the header is the only identity the page itself offers.
    */
-  function channelTitle() {
+  function channelTitleEl() {
     let nodes = [];
     try {
       nodes = document.querySelectorAll('[data-tid="channelTitle-text"]');
     } catch (_) {
       return null;
     }
-    for (const node of nodes) {
+    // Newest last: when Teams keeps the previous channel mounted through a
+    // switch, the header appended last is the channel now in front.
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const node = nodes[i];
       if (!node.getClientRects().length) continue;
-      const text = collapse(node.textContent || '');
-      if (text) return text;
+      if (!collapse(node.textContent || '')) continue;
+      return node;
     }
     return null;
   }
 
-  /** The team name Teams leaves beside the channel, when it renders one. */
-  function teamTitle() {
-    const selectors = [
-      '[data-tid="teamTitle-text"]',
-      '[data-tid*="team-title" i]',
-      '[data-tid*="teamTitle" i]',
-      '[data-tid*="team-name" i]'
-    ];
-    for (const selector of selectors) {
-      let nodes = [];
-      try {
-        nodes = document.querySelectorAll(selector);
-      } catch (_) {
-        continue;
-      }
-      for (const node of nodes) {
-        if (!node.getClientRects().length) continue;
-        const text = collapse(node.textContent || '');
-        if (text) return text;
-      }
-    }
-    return '';
+  function channelTitle() {
+    const el = channelTitleEl();
+    return el ? collapse(el.textContent || '') : null;
   }
 
-  function channelKey() {
-    // The channel's own name, plus its team when Teams shows one. This is the
-    // only identity that changes in this build: `location.href` is the same
-    // root URL in every channel, so a URL-only key put all of them in one
-    // bucket — which is how a channel's bars followed the user to the next one.
-    const title = channelTitle();
-    if (title) {
-      return `title:${channelIdOf(teamTitle())}|${channelIdOf(title)}`;
-    }
-
-    const href = String(location.href || '');
-    let params = null;
-    try {
-      params = new URL(href).searchParams;
-    } catch (_) {
-      params = null; // An unparsable URL still has the route below.
-    }
-
-    // New Teams does not always put the channel in the path: a channel can sit
-    // on a bare route with `channelId` (and the team as `groupId`) in the query.
-    // Keying only the path and hash gave every one of those channels the same
-    // bucket, which is exactly how one channel's bars survived a channel change.
-    const route = href.match(/\/channel\/([^/?#]+)/i);
-    const fromQuery = params
-      ? params.get('channelId') || params.get('channelid') || ''
-      : '';
-    const id = route ? route[1] : fromQuery;
-    if (id) {
-      const teamMatch =
-        (params && (params.get('groupId') || params.get('teamId'))) ||
-        (href.match(/[?&]groupId=([^&#]+)/i) || href.match(/\/team\/([^/?#]+)/i) || [])[1] ||
-        '';
-      const team = teamMatch ? channelIdOf(teamMatch) : '';
-      return CHANNEL_PREFIX + (team ? team + '/' : '') + channelIdOf(id);
-    }
-
-    // No channel named anywhere: the whole route is the identity, query string
-    // included. Leaving the search out made two different channels look alike.
-    const rest = `${location.pathname || ''}${location.search || ''}${location.hash || ''}`
-      .replace(/\/+$/, '');
-    return rest ? `route:${rest.slice(0, 300)}` : 'route:teams';
-  }
-
-  /** A channel id as Teams writes it, decoded and lower-cased to stay stable. */
-  function channelIdOf(segment) {
-    let id = String(segment || '');
-    try {
-      id = decodeURIComponent(id);
-    } catch (_) {
-      // A percent-mangled id: the raw segment is still a fine key.
-    }
-    return id.toLowerCase().slice(0, 200);
+  function watchChannelTitle() {
+    const el = channelTitleEl();
+    if (el === titleEl) return;
+    titleObserver?.disconnect();
+    titleObserver = null;
+    titleEl = el;
+    if (!el) return;
+    titleObserver = new MutationObserver(() => {
+      if (!ready) return;
+      resetForChannelChange();
+      scheduleScan(true);
+    });
+    titleObserver.observe(el, { childList: true, characterData: true, subtree: true });
   }
 
   /**
-   * Moves the bars to whichever channel is on screen. Teams changes channels
-   * without a page load, so this is checked on every scan.
+   * A channel switch replaces the list, and usually the tab strip with it.
+   * Everything measured against the channel that just left is dropped here, so
+   * the scan that follows measures the channel now on screen.
    */
-  function syncPinChannel(force) {
-    const channel = channelKey();
-    if (channel === pinChannel) {
-      pinChannelNext = '';
-      pinSwitchPending = false;
-      return false;
-    }
-
-    // A different channel is on screen. Its pins are its own, and nothing read
-    // for the channel before it may survive the move: the records and the bars
-    // go at once, and nothing is harvested again until the new key is certain.
-    // That is what keeps the two channels' pins from ever mixing — before, the
-    // records were only dropped once the new key had been confirmed, and the
-    // sidebar of the channel being opened was filed under the old key meanwhile.
-    if (nativePins.size) {
-      nativePins.clear();
-      explicitPinChange = true;
-    }
-    // The bars go now, not at the end of the scan: the channel before this one
-    // must not be on screen for even one more frame.
-    document.getElementById(STACK_ID)?.remove();
-    pinSwitchPending = true;
-
-    // Teams rewrites the route while it settles a channel, and a key that flips
-    // for a scan or two used to drop the bars of the channel being opened. A scan
-    // waits until the new key has been read twice; a click (`force`) switches at
-    // once, because that is a certain move.
-    if (!force) {
-      if (channel !== pinChannelNext) {
-        pinChannelNext = channel;
-        return false;
-      }
-    }
-    pinChannelNext = '';
-    pinSwitchPending = false;
-    pinSettleUntil = Date.now() + PIN_PANE_SETTLE;
-    pinPaneStaleSig = pinPaneLastSig;
-    pinPaneStaleTries = 0;
-
-    nativePins.clear();
-
-    pinChannel = channel;
-    return true;
-  }
-
-  /**
-   * Drops every bar the moment the channel's own furniture is replaced.
-   *
-   * A channel switch re-creates the tab strip, and usually the message list
-   * with it. Whatever pins were read before that are not this channel's, so
-   * they go at once; the scan that follows re-reads the channel now on screen.
-   * This also covers a build that keeps the same URL for every channel, where
-   * the route alone can never notice the move.
-   */
-  function clearPinsForChannelChange() {
-    if (nativePins.size) {
-      nativePins.clear();
-      explicitPinChange = true;
-    }
-    pinChannelNext = '';
-    pinSwitchPending = true;
-    // The sidebar is reused across channels and filled a moment later: leave it
-    // alone until it has had time to show the channel now on screen.
-    pinSettleUntil = Date.now() + PIN_PANE_SETTLE;
-    pinPaneStaleSig = pinPaneLastSig;
-    pinPaneStaleTries = 0;
-    document.getElementById(STACK_ID)?.remove();
+  function resetForChannelChange() {
+    lastList = null;
+    listRect = null;
   }
 
   // -------------------------------------------------------------- persistence
@@ -3998,7 +2831,7 @@
     let any = null;
     try {
       any = list.querySelector(
-        '[data-tid*="skeleton" i], [data-tid*="loading" i], [class*="skeleton" i], [class*="Spinner__spinner"]'
+        '[data-tid*="skeleton" i], [data-tid*="shimmer" i], [data-tid*="loading" i], [data-tid*="placeholder" i], [class*="skeleton" i], [class*="shimmer" i], [class*="Spinner__spinner"], [role="progressbar"]'
       );
     } catch (_) {
       return;
@@ -4009,10 +2842,17 @@
     }
     if (!any) return;
 
+    // Anything the user writes in, or that holds a composer. Teams names the
+    // collapsed reply box under a post with a placeholder id, and treating one
+    // as a loading row hid the Reply control under every post in the channel.
+    const composeAreas =
+      '[data-tid*="reply" i], [data-tid*="compose" i], [data-shortcut-context="compose-field"], [contenteditable="true"], [data-tid="ckeditor"]';
+
     for (const el of list.querySelectorAll(selectors.join(','))) {
       // A skeleton inside a real post (a link card still loading) is that
       // post's own business, not a stand-in row.
       if (el.closest('.tpp-post')) continue;
+      if (el.closest(composeAreas) || el.querySelector(composeAreas)) continue;
 
       // A spinner holds no text, so the climb below would walk all the way up to
       // the box that holds the posts when they are all closed up — and hiding
@@ -4117,8 +2957,8 @@
    *
    * A pin search is exempt: it walks the list through its history on purpose.
    */
-  function clampScroll(list) {
-    if (!ready || !features || !features.inboxZero || pinJump || !list) return;
+  function clampScroll(list, moveScroll = true) {
+    if (!ready || !features || !features.inboxZero || !list) return;
     const box = scrollBoxFor(list);
     if (!box) return;
     lastScrollBox = box;
@@ -4148,7 +2988,7 @@
       const filtered = Array.from(box.querySelectorAll('.tpp-post')).some(
         (row) => row.dataset.tppTucked !== undefined
       );
-      if (filtered && box.scrollTop > 1) box.scrollTop = 0;
+      if (moveScroll && filtered && box.scrollTop > 1) box.scrollTop = 0;
       return;
     }
 
@@ -4161,6 +3001,12 @@
     // re-renders the way a total of the hidden posts did.
     setRoomPad(Math.max(0, Math.round(box.clientHeight - shown) - 2));
 
+    // Only a scroll this script is allowed to answer is pulled back. A scan
+    // that moved the scroll while Teams was paging a channel's history was read
+    // by Teams as being at the end of what it had, and it fetched the next
+    // batch: that is how a whole channel's history ended up loading into the
+    // list. The pad alone is enough to keep the end of the tab honest.
+    if (!moveScroll) return;
     const limit = Math.max(0, last - box.clientHeight);
     if (box.scrollTop > limit + 1) box.scrollTop = limit;
   }
@@ -4207,7 +3053,50 @@
 
   // ------------------------------------------------------------------- scan
 
+  /**
+   * The scan, timed while the readout is switched on (see start).
+   *
+   * Every path ends up here, so one timer around the body is the whole
+   * measurement: how many scans a second are being run, and what the worst and
+   * the average one cost. A scan on a settled channel should cost nothing, and
+   * this is how that is checked rather than assumed.
+   */
   function scan() {
+    if (!perf.on) {
+      scanNow();
+      return;
+    }
+    const started = performance.now();
+    try {
+      scanNow();
+    } finally {
+      const ms = performance.now() - started;
+      perf.scans += 1;
+      perf.total += ms;
+      if (ms > perf.max) perf.max = ms;
+      const now = Date.now();
+      if (now - perf.writtenAt >= 1000) {
+        perf.writtenAt = now;
+        const seconds = Math.max(now - perf.startedAt, 1) / 1000;
+        document.documentElement.setAttribute(
+          'data-tpp-perf',
+          `scans ${perf.scans} (${(perf.scans / seconds).toFixed(1)}/s) ` +
+            `avg ${(perf.total / perf.scans).toFixed(1)}ms max ${perf.max.toFixed(0)}ms ` +
+            `row-reads ${perf.rebuilds} ` +
+            `avg ${perf.rebuilds ? (perf.rebuildTotal / perf.rebuilds).toFixed(1) : '0'}ms ` +
+            `mutation-batches ${perf.batches} (${perf.relevant} relevant) ` +
+            `callback ${(perf.mutTotal / perf.batches).toFixed(2)}ms ` +
+            `max ${perf.mutMax.toFixed(0)}ms ` +
+            `rows ${rowsById.size} ` +
+            `mode ${channelMode === true ? 'channel' : channelMode === false ? 'off' : 'settling'} ` +
+            `load ${perf.loadMs ? perf.loadMs.toFixed(0) + 'ms' : '-'} (${perf.loadRows} rows) ` +
+            `build ${BUILD}`
+        );
+      }
+    }
+  }
+
+  function scanNow() {
     if (!ready) return;
 
     // A scan answers the change that asked for it, so both timers are settled.
@@ -4259,9 +3148,7 @@
     // theme observer firing, so the scan only re-checks it occasionally.
     applyThemeIfDue();
 
-    // Teams swaps channels in place, and a pin belongs to its channel: the
-    // bars have to move to the new channel's pins before anything is drawn.
-    syncPinChannel();
+    watchChannelTitle();
 
     // A reply box that our own styles were put into by an earlier match is
     // given back before this scan looks for the list again. Only the list this
@@ -4308,11 +3195,9 @@
         // drawing anything: everything of ours that is fixed to the window goes
         // at once rather than floating over that panel until the grace runs out.
         if (!postsTabSelected()) {
-          for (const id of [EMPTY_ID, STACK_ID, CONFETTI_ID, TOAST_ID]) {
+          for (const id of [EMPTY_ID, CONFETTI_ID, TOAST_ID]) {
             document.getElementById(id)?.remove();
           }
-          clearPinInset();
-          if (pinJump) cancelPinSearch();
         }
         // Twenty seconds, not one: the bars are fixed to the window and do not
         // need the list to stay where they are, so a swap can last as long as it
@@ -4321,14 +3206,13 @@
         // channel goes through teardownChannelUi at once anyway.
         if (now - listMissingAt < 20000) return;
 
-        for (const id of [STACK_ID, EMPTY_ID]) document.getElementById(id)?.remove();
+        for (const id of [EMPTY_ID]) document.getElementById(id)?.remove();
         // The tabs live in the channel's own tab strip, so they survive a scan
         // that finds no list; renderTabs drops them once that strip is gone.
         renderTabs();
         document.documentElement.removeAttribute(HAS_ARCHIVES_ATTR);
         clearTopInset();
         clearLeftInset();
-        clearPinInset();
         return;
       }
       listMissingAt = 0;
@@ -4339,14 +3223,15 @@
       // work belongs on a list nobody is looking at, so the overlays come down
       // and this scan stops here until Posts is in front again.
       if (!postsPanelShown(list)) {
-        for (const id of [EMPTY_ID, STACK_ID, CONFETTI_ID, TOAST_ID]) {
+        for (const id of [EMPTY_ID, CONFETTI_ID, TOAST_ID]) {
           document.getElementById(id)?.remove();
         }
-        clearPinInset();
-        if (pinJump) cancelPinSearch();
         return;
       }
 
+      // A list this scan has not seen before is a whole channel's worth of
+      // posts to read whatever the mutation log says.
+      const freshList = list !== lastList;
       lastList = list;
       listRect = list.getBoundingClientRect();
 
@@ -4355,9 +3240,32 @@
       list.classList.toggle('tpp-list', Boolean(features.inboxZero));
 
       lastScrollBox = scrollBoxFor(list);
-      rebuildRows(list);
+
+      // The row walk is the expensive part of a scan: a few hundred posts, and
+      // for each one several queries and its whole text. It is only owed when
+      // the posts can have changed — a new list, or a mutation inside the list
+      // since the last read (the observer marks that, see absorbNodes). Idle
+      // scans then cost an overlay check rather than a pass over every post.
+      const read = listDirty || freshList || rowsById.size === 0;
+      listDirty = false;
+      if (read) {
+        const readAt = perf.on ? performance.now() : 0;
+        rebuildRows(list);
+        if (perf.on) {
+          perf.rebuilds += 1;
+          perf.rebuildTotal += performance.now() - readAt;
+        }
+      }
+      if (perf.on) {
+        if (rowsById.size === 0) {
+          if (!perf.loadStartedAt) perf.loadStartedAt = performance.now();
+        } else if (perf.loadStartedAt) {
+          perf.loadMs = performance.now() - perf.loadStartedAt;
+          perf.loadRows = rowsById.size;
+          perf.loadStartedAt = 0;
+        }
+      }
       markLoadingRows(list);
-      const pinRoom = renderPins(list);
       renderEmpty(list);
       uiDrawn = true;
 
@@ -4376,17 +3284,20 @@
         settleTries = 0;
       }
 
-      // Keep the first post clear of the pinned bars. They usually hold their own
-      // room above Teams' composer (placePinStack); this is the case where the
-      // list itself is the top of the area.
-      if (pinRoom > 0) applyTopInset(list, pinRoom);
-      else clearTopInset(list);
-
-      if (features.inboxZero || features.pinnedMessages) applyLeftInset(list);
+      // Nothing of ours sits above the first post any more; a list that still
+      // carries top padding from an older build has it given back.
+      clearTopInset(list);
+      if (features.inboxZero) applyLeftInset(list);
       else clearLeftInset(list);
 
       // The posts have just been re-measured: the Inbox may now end higher up.
-      clampScroll(list);
+      // Only after a read — this measures every post on show, and the scroll
+      // handler re-checks the limit as the user moves (clampSoon). The scroll
+      // itself is left alone here unless the view just changed: moving it on
+      // every scan made Teams page a channel's whole history in.
+      const viewChanged = clampView !== view;
+      clampView = view;
+      if (read) clampScroll(list, viewChanged);
 
       // The seams have just moved or gone: re-check where the pointer is, so the
       // control cannot outlive the gap it was describing.
@@ -4420,7 +3331,7 @@
 
     for (const node of nodes) {
       if (!node || node.nodeType !== 1) continue;
-      if (node.closest('[data-tpp-ui], .tpp-pin-stack, .tpp-tabs, .tpp-empty-state')) continue;
+      if (node.closest('[data-tpp-ui], .tpp-tabs, .tpp-empty-state')) continue;
 
       for (const row of newRows(node)) {
         if (row.dataset.tppModal === '1') continue;
@@ -4493,6 +3404,19 @@
   }
 
   /**
+   * Adds one observer callback to the readout (see scan).
+   *
+   * Teams mutates the page dozens of times a second, so this callback runs far
+   * more often than the scan does — and its cost is invisible to the scan timer.
+   * Anything it measures here is our share of a page that is still arriving.
+   */
+  function recordMutationTime(startedAt) {
+    const ms = performance.now() - startedAt;
+    perf.mutTotal += ms;
+    if (ms > perf.mutMax) perf.mutMax = ms;
+  }
+
+  /**
    * The scan after a change.
    *
    * A mounted pane — a channel switch, the Posts tab coming back — is waited on
@@ -4517,10 +3441,17 @@
    */
   function scheduleSlowScan() {
     if (slowTimer || rescanTimer) return;
-    slowTimer = setTimeout(() => {
+    const tick = () => {
       slowTimer = 0;
+      // A hidden tab is not worth a scan of any kind; the churn that would have
+      // asked for one carries on when it comes back.
+      if (document.hidden) {
+        slowTimer = setTimeout(tick, SLOW_SCAN_MS);
+        return;
+      }
       scan();
-    }, 1500);
+    };
+    slowTimer = setTimeout(tick, SLOW_SCAN_MS);
   }
 
   /**
@@ -4553,6 +3484,8 @@
     '[data-tid="message-pane-list-runway"]',
     '[data-tid="message-pane-list-viewport"]',
     '[data-tid="channel-pane-message-list"]',
+    '[data-tid="channel-info-pane-pinned-posts-list"]',
+    '[data-tid*="pinned-posts-list" i]',
     '[data-tid="post-compose-collapsed"]',
     '[role="tablist"]'
   ].join(',');
@@ -4577,6 +3510,9 @@
     const html = document.documentElement;
     if (!html) return;
 
+    // A switch or a view change re-derives every row, so the walk is owed.
+    listDirty = true;
+
     syncFeatureFlags();
 
     // Each switch owns its own marks and nothing else: turning one feature off
@@ -4595,13 +3531,6 @@
       }
     }
 
-    if (!features.pinnedMessages) {
-      document.getElementById(STACK_ID)?.remove();
-      clearPinInset();
-      // The rail loses its pin button: repaint it without one.
-      for (const el of document.querySelectorAll('.tpp-post')) delete el.dataset.tppPainted;
-    }
-
     if (!features.compactPosts) {
       // The cards come off and each row goes back to Teams' own layout.
       for (const el of document.querySelectorAll('.tpp-post')) {
@@ -4616,7 +3545,7 @@
       delete el.dataset.tppPlaceholder;
     }
 
-    if (!features.inboxZero && !features.pinnedMessages) clearLeftInset();
+    if (!features.inboxZero) clearLeftInset();
 
     scan();
   }
@@ -4655,6 +3584,8 @@
 
     // Channel-only furniture. The Posts tab is the surest: chats have no tab
     // strip at all, and every channel has one.
+    if (document.getElementById(TABS_ID)) return true;
+    if (channelTitle()) return true;
     if (nativePostsTab()) return true;
     if (
       visible(
@@ -4736,22 +3667,16 @@
    */
   function teardownChannelUi() {
     uiDrawn = false;
+    perf.loadStartedAt = 0;
     settleTries = 0;
+    listDirty = true;
     lastScrollBox = null;
-    // Pins are facts about one channel. Leaving the area drops every record:
-    // coming back to a channel reads its pins again, it never inherits them.
-    nativePins.clear();
-    pinChannel = '';
-    pinChannelNext = '';
-    pinSwitchPending = false;
-    pinSettleUntil = 0;
-    pinPaneLastSig = '';
-    pinPaneStaleSig = '';
-    pinPaneStaleTries = 0;
-    for (const id of [TABS_ID, STACK_ID, EMPTY_ID, TOAST_ID, CONFETTI_ID]) {
+    titleObserver?.disconnect();
+    titleObserver = null;
+    titleEl = null;
+    for (const id of [TABS_ID, EMPTY_ID, TOAST_ID, CONFETTI_ID]) {
       document.getElementById(id)?.remove();
     }
-    hideSearchCancel();
 
     lastList = null;
     listRect = null;
@@ -4759,7 +3684,6 @@
     releaseNativeTab();
     clearTopInset();
     clearLeftInset();
-    clearPinInset();
 
     for (const el of document.querySelectorAll('.tpp-list')) el.classList.remove('tpp-list');
     for (const el of document.querySelectorAll('.tpp-post')) clearPostUi(el);
@@ -4791,12 +3715,20 @@
 
     features = normalize(items[STORAGE_KEY]);
     readState = normalizeMap(items[UNREAD_KEY], READ_LIMIT);
+    try {
+      const local = await chrome.storage.local.get(ACTIVITY_KEY);
+      activityState = normalizeActivity(local && local[ACTIVITY_KEY]);
+    } catch (_) {
+      activityState = {};
+    }
 
-    // Entries the old build inferred from Teams' "New" badge and "Last read"
+    // Entries an older build inferred from Teams' "New" badge and "Last read"
     // line are r: 0 with no `c`; they are the sweep, not the user's own marks.
+    // A latch this build wrote from the badge carries `n` and is kept: that is
+    // what holds a New post in the Inbox after Teams clears the badge.
     let dropped = false;
     for (const [id, entry] of Object.entries(readState)) {
-      if (entry.r === 0 && entry.c !== 1) {
+      if (entry.r === 0 && entry.c !== 1 && entry.n !== 1) {
         delete readState[id];
         dropped = true;
       }
@@ -4817,12 +3749,16 @@
       chrome.storage.sync.remove(LEGACY_ARCHIVE_KEY, () => void chrome.runtime.lastError);
     }
 
-    // Pins used to be kept here: the user's own, each with a copy of the post's
-    // words. Pinning is Teams' own now, so the map is dropped and its share of
-    // the sync quota goes with it.
-    pinChannel = channelKey();
+    // Keys older builds left behind: their own pins in sync storage, and the
+    // pinned-list cache in local storage. Nothing reads either now, so they are
+    // cleared rather than left spending the quota.
     if (items[LEGACY_PINS_KEY]) {
       chrome.storage.sync.remove(LEGACY_PINS_KEY, () => void chrome.runtime.lastError);
+    }
+    try {
+      chrome.storage.local.remove('teamsPlusPlus.channelPins', () => void chrome.runtime.lastError);
+    } catch (_) {
+      // No local storage: there is no cache to clear.
     }
     view = normalizeView(items[VIEW_KEY]);
     ready = true;
@@ -4836,6 +3772,15 @@
     }
 
     document.documentElement.setAttribute('data-tpp-build', BUILD);
+
+    // A readout for investigating slowness, off unless asked for: set
+    // `localStorage.tppPerf = '1'` in the page's console, reload, and
+    // `<html data-tpp-perf="...">` carries the scan counts and timings.
+    try {
+      perf.on = localStorage.getItem('tppPerf') === '1';
+    } catch (_) {
+      perf.on = false; // Storage can be blocked; the counters simply stay off.
+    }
 
     // Paint the right theme before anything of ours is drawn.
     applyTheme();
@@ -4860,6 +3805,8 @@
 
     observer = new MutationObserver((records) => {
       if (!ready) return;
+      const callbackAt = perf.on ? performance.now() : 0;
+      if (perf.on) perf.batches += 1;
 
       // Before the scan's debounce: a post Teams has just inserted is closed up
       // now, so a fetched batch never paints at full height and then collapses.
@@ -4877,6 +3824,7 @@
         const mounted = [];
         let relevant = false;
         let switched = false;
+        let listLost = false;
         let full = false;
         for (const record of records) {
           const target = record.target;
@@ -4889,6 +3837,7 @@
             if (lastList && node.contains(lastList)) {
               relevant = true;
               switched = true;
+              listLost = true;
             }
             if (channelSwapNode(node)) switched = true;
           }
@@ -4917,19 +3866,24 @@
           }
           if (full) break;
         }
+        // The posts (or the list itself) have changed: the row walk is owed.
+        if (switched || listLost || inList.length) listDirty = true;
         // A new channel is in front: its pins are not the ones on screen.
-        if (switched) clearPinsForChannelChange();
+        if (switched) resetForChannelChange();
         // Any count of rows inside the list: the tuck has to land before the
         // browser paints, or the post shows for a moment and then disappears.
         if (inList.length) absorbNodes(inList);
         // A pane is not a batch: only a handful of nodes is worth walking
         // before paint, and a switch is left to the scan it schedules.
         if (mounted.length && mounted.length <= 6) absorbNodes(mounted);
-        if (relevant) scheduleScan(true);
-        else scheduleSlowScan();
+        if (relevant) {
+          if (perf.on) perf.relevant += 1;
+          scheduleScan(true);
+        } else scheduleSlowScan();
       } else {
         scheduleScan();
       }
+      if (perf.on) recordMutationTime(callbackAt);
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
 
@@ -4954,9 +3908,16 @@
     bootstrap();
   }
 
-  // Keep an open tab in sync when settings, archives or pins change elsewhere.
+  // Keep an open tab in sync when settings, archives or activity change elsewhere.
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'sync' || !ready) return;
+    if (!ready) return;
+    if (area === 'local') {
+      if (changes[ACTIVITY_KEY]) {
+        activityState = normalizeActivity(changes[ACTIVITY_KEY].newValue);
+      }
+      return;
+    }
+    if (area !== 'sync') return;
     if (changes[STORAGE_KEY]) features = normalize(changes[STORAGE_KEY].newValue);
     if (changes[UNREAD_KEY]) {
       readState = normalizeMap(changes[UNREAD_KEY].newValue, READ_LIMIT);

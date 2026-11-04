@@ -33,18 +33,11 @@
       attr: 'data-tpp-inbox-zero',
       label: 'Inbox Zero',
       hint: 'Splits the channel into an Inbox of unread posts and an Archive of the rest. Archiving a post marks it read.',
-      default: true
-    },
-    {
-      id: 'pinnedMessages',
-      attr: 'data-tpp-pinned-messages',
-      label: 'Pinned message bars',
-      hint: 'Shows the posts pinned for the whole channel as purple bars at the top. Click one to open it.',
-      default: true,
-      // Not a choice: the bars are part of the Inbox and have no switch in the
-      // popup. Locked features ignore storage, so an older build's "off" — or a
-      // hand-edited sync value — cannot turn them off for this user.
-      locked: true
+      default: false,
+      // Not ready for release. The code is kept so the feature can be picked up
+      // again, but the switch is hidden and normalize() pins it off: a stored or
+      // synced `true` cannot switch it on.
+      disabled: true
     },
     {
       id: 'compactPosts',
@@ -58,7 +51,9 @@
       attr: 'data-tpp-inbox-confetti',
       label: 'Inbox Zero confetti',
       hint: 'Throws one round of confetti when the Inbox Zero sign appears. Turn it off for a quiet Inbox.',
-      default: true
+      default: false,
+      // Part of Inbox Zero, and off with it for this release.
+      disabled: true
     }
   ];
 
@@ -73,13 +68,16 @@
     const state = { ...DEFAULTS };
     if (stored && typeof stored === 'object') {
       for (const feature of FEATURES) {
-        // A locked feature is always its default: it has no switch, so nothing
-        // in storage may describe it as off.
-        if (feature.locked) continue;
         if (typeof stored[feature.id] === 'boolean') {
           state[feature.id] = stored[feature.id];
         }
       }
+    }
+    // A disabled feature is off in every context, whatever storage or Chrome
+    // Sync says. This is the one gate the content script, popup and service
+    // worker all pass through.
+    for (const feature of FEATURES) {
+      if (feature.disabled) state[feature.id] = false;
     }
     return state;
   }

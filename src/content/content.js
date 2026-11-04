@@ -29,6 +29,7 @@
     LEGACY_ARCHIVE_KEY,
     SINCE_KEY,
     VIEW_KEY,
+    NEW_POSTS_KEY,
     FEATURES,
     normalize,
     normalizeMap,
@@ -44,6 +45,8 @@
    * channel's history costs nothing.
    */
   const READ_LIMIT = 240;
+  /** How many compact-view marks are kept before the oldest are dropped. */
+  const NEW_POST_LIMIT = 300;
   /**
    * The key the build before this one kept the user's own pins under, each with
    * a copy of the post's words. Pinning is Teams' own now, so it is removed.
@@ -88,7 +91,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-03.144';
+  const BUILD = '2026-11-03.145';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -139,6 +142,13 @@
    * with no entry is judged by its timestamp against `since`, below.
    */
   let readState = {};
+  /**
+   * id -> { n: 1 } while the compact card is new, or { f } with the activity
+   * fingerprint taken when the card was opened. Teams' New badge is only the
+   * arrival signal; this is what keeps the badge and border until a click.
+   */
+  let newState = {};
+  let newSaveTimer = 0;
   /** id -> the activity fingerprint taken when the post was last read. */
   let activityState = {};
   let activitySaveTimer = 0;
@@ -253,6 +263,8 @@
     if (open) unfolded.add(id);
     else unfolded.delete(id);
     row.classList.toggle('tpp-unfold', open);
+    // Opening the card is the one act that marks a post read in this view.
+    if (open) markPostOpened(row);
     // Opening a post can put Teams' own divider back on screen, so which line
     // is shown is decided again at once — otherwise the copy stays beside it and
     // the post shows two. The row also changed height, so the line is re-measured.
@@ -554,7 +566,7 @@
     // Teams' own read markers live in the part of the row the card hides, so
     // the card carries them. With Inbox Zero on, the Inbox and Archive tabs are
     // the marker instead, and these would contradict them.
-    const unread = !features.inboxZero && isUnreadPost(row);
+    const unread = !features.inboxZero && row.dataset.tppNew === '1';
     const lastRead = !features.inboxZero && endsLastRead(row);
 
     // A card already drawn is left alone unless the post's author, time, words
@@ -648,6 +660,60 @@
   /** Whether Teams marks this post as unread. */
   function isUnreadPost(row) {
     return Boolean(first(S.newBadge, row));
+  }
+
+  /**
+   * Whether this post is still new in the compact view.
+   *
+   * Teams' New badge is the arrival signal, but Teams clears it as soon as the
+   * channel is opened — so the first sighting is latched here, and the post
+   * keeps its badge and border until the user opens its card. A post that has
+   * been opened comes back only when the post itself has moved on (a reply,
+   * reaction, attachment or edit), which is what a bumped post looks like.
+   */
+  function refreshNewPost(id, row) {
+    if (!id || !features || !features.compactPosts || features.inboxZero) return false;
+    const record = newState[id];
+    if (record && record.n === 1) return true;
+    if (!isUnreadPost(row)) return false;
+
+    // The badge is still showing on a post already opened: it stays read until
+    // the post moves past the fingerprint captured when it was opened.
+    if (record && record.f) {
+      const current = activityOf(row);
+      if (!current || current === record.f) return false;
+    }
+    setNewRecord(id, record && record.f ? { n: 1, f: record.f } : { n: 1 });
+    return true;
+  }
+
+  /**
+   * Marks a post read because its card was opened — the only thing in the
+   * compact view that does. The badge and purple border go at once, and the
+   * post's fingerprint is kept so Teams' still-showing New badge cannot bring
+   * them back; only news after this point does.
+   */
+  function markPostOpened(row) {
+    const id = row && row.dataset.tppId;
+    if (!id || !features || !features.compactPosts || features.inboxZero) return;
+    const fingerprint = activityOf(row);
+    setNewRecord(id, fingerprint ? { f: fingerprint } : {});
+    delete row.dataset.tppNew;
+
+    const card = row.querySelector(':scope > [data-tpp-ui="preview"]');
+    if (card) {
+      card.classList.remove('tpp-preview-unread');
+      const badge = card.querySelector('.tpp-preview-new');
+      if (badge) badge.hidden = true;
+    }
+    saveNewSoon();
+  }
+
+  /** Writes one compact-view mark, newest last so trimming keeps recent ones. */
+  function setNewRecord(id, value) {
+    delete newState[id];
+    newState[id] = value;
+    saveNewSoon();
   }
 
   /** Channel rows already resolved to their name element, so the DOM is walked once. */
@@ -1758,6 +1824,12 @@
         saveReadSoon();
         isRead = false;
       }
+      // The compact view's own marker: a latched New badge keeps the card new
+      // until its card is opened (markPostOpened), however soon Teams clears
+      // its own badge.
+      if (refreshNewPost(id, row)) row.dataset.tppNew = '1';
+      else if (row.dataset.tppNew !== undefined) delete row.dataset.tppNew;
+
       setTag(row, isRead ? 'read' : '');
       paintRow(row);
       next.set(id, {
@@ -3176,6 +3248,26 @@
     await writeSync({ [UNREAD_KEY]: trimmed });
   }
 
+  function saveNewSoon() {
+    clearTimeout(newSaveTimer);
+    newSaveTimer = setTimeout(() => {
+      newSaveTimer = 0;
+      persistNew();
+    }, 200);
+  }
+
+  async function persistNew() {
+    let trimmed = Object.fromEntries(Object.entries(newState).slice(-NEW_POST_LIMIT));
+    newState = trimmed;
+    if (await writeSync({ [NEW_POSTS_KEY]: trimmed })) return;
+
+    trimmed = Object.fromEntries(
+      Object.entries(trimmed).slice(-Math.max(10, Math.floor(NEW_POST_LIMIT / 4)))
+    );
+    newState = trimmed;
+    await writeSync({ [NEW_POSTS_KEY]: trimmed });
+  }
+
   // ------------------------------------------------------------- placeholders
 
   /**
@@ -4076,11 +4168,13 @@
       [LEGACY_ARCHIVE_KEY]: null,
       [SINCE_KEY]: null,
       [LEGACY_PINS_KEY]: null,
+      [NEW_POSTS_KEY]: null,
       [VIEW_KEY]: null
     });
 
     features = normalize(items[STORAGE_KEY]);
     readState = normalizeMap(items[UNREAD_KEY], READ_LIMIT);
+    newState = normalizeMap(items[NEW_POSTS_KEY], NEW_POST_LIMIT);
     try {
       const local = await chrome.storage.local.get(ACTIVITY_KEY);
       activityState = normalizeActivity(local && local[ACTIVITY_KEY]);
@@ -4276,6 +4370,10 @@
 
   // Keep an open tab in sync when settings, archives or activity change elsewhere.
   chrome.storage.onChanged.addListener((changes, area) => {
+    if (changes[NEW_POSTS_KEY]) {
+      newState = normalizeMap(changes[NEW_POSTS_KEY].newValue, NEW_POST_LIMIT);
+      scheduleScan(true);
+    }
     if (!ready) return;
     if (area === 'local') {
       if (changes[ACTIVITY_KEY]) {

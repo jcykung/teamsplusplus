@@ -15,6 +15,10 @@
  *                           costs nothing until it is unread again.
  *   teamsPlusPlus.view      "inbox" (read posts hidden) or "archives"
  *                           (only read posts shown)
+ *   teamsPlusPlus.newPosts  post id -> { n: 1 } while the compact card is still
+ *                           new, or { f } with the fingerprint captured when it
+ *                           was opened. The only thing that marks a post read in
+ *                           the compact view is opening its card.
  */
 (function (root) {
   'use strict';
@@ -26,6 +30,8 @@
   /** When the extension was installed, in ms: posts stamped later are unread. */
   const SINCE_KEY = 'teamsPlusPlus.since';
   const VIEW_KEY = 'teamsPlusPlus.view';
+  /** The compact view's own marks: see newPosts in the header above. */
+  const NEW_POSTS_KEY = 'teamsPlusPlus.newPosts';
 
   const FEATURES = [
     {
@@ -139,6 +145,7 @@
     LEGACY_ARCHIVE_KEY,
     SINCE_KEY,
     VIEW_KEY,
+    NEW_POSTS_KEY,
     FEATURES,
     DEFAULTS,
     normalize,

@@ -63,8 +63,11 @@ post and centres it between the two cards — same line, same wording, same
 spacing. Where Teams' divider is already on screen, the copy stands down rather
 than double it.
 
-The switch lives in the popup and writes one synced preference, so it applies to
-every Teams tab and every signed-in Chrome profile.
+Opening a card is the one thing that marks a post read. Until then it keeps its
+**New** badge and purple border, even after Teams clears its own badge when the
+channel is opened — Teams' idea of read is not the one this view follows. Opening
+a post that has moved on since you last read it brings the markers back, so a
+reply, a reaction, a new attachment or an edit puts the card back in view.
 
 The Compact posts switch lives in the popup, and its setting is stored in
 `chrome.storage.sync`, so it follows the user to every Chrome profile signed in

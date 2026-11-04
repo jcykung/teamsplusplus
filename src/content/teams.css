@@ -676,15 +676,26 @@ html[data-tpp-compact-posts] [data-tpp-unread-name] {
   font-weight: 600 !important;
 }
 
-html[data-tpp-compact-posts] [data-tpp-unread-name]::before {
-  content: "" !important;
+/*
+ * The dot is a real element, inserted immediately before the name by
+ * paintChannelRail, so it needs no pseudo-element slot on Teams' own label and
+ * shows up whatever that label is built from.
+ */
+html[data-tpp-compact-posts] [data-tpp-ui="rail-dot"] {
   display: inline-block !important;
+  flex: none !important;
+  align-self: center !important;
   width: 7px !important;
+  min-width: 7px !important;
   height: 7px !important;
+  min-height: 7px !important;
   margin-right: 6px !important;
+  padding: 0 !important;
   border-radius: 50% !important;
   background: var(--tpp-purple-user) !important;
   vertical-align: middle !important;
+  color: transparent !important;
+  overflow: visible !important;
 }
 
 /*

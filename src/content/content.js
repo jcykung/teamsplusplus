@@ -819,18 +819,49 @@
       const name = railNameOf(item);
       if (!name) continue;
       names.add(name);
-      if (isBold(name)) {
+      // Teams may bold the label itself or the whole row around it, and which
+      // one carries the weight differs between builds: either is the cue.
+      const unread = isBold(name) || isBold(item);
+      if (unread) {
         if (name.dataset.tppUnreadName !== '1') name.dataset.tppUnreadName = '1';
       } else if (name.dataset.tppUnreadName !== undefined) {
         delete name.dataset.tppUnreadName;
       }
+      paintRailDot(name, unread);
     }
 
-    // A row Teams has replaced leaves its mark on a detached node; this is the
-    // cheap way to keep the page free of them.
+    // A row Teams has replaced leaves its mark, or our dot, on a detached or
+    // renamed node; this is the cheap way to keep the page free of them.
     for (const el of document.querySelectorAll('[data-tpp-unread-name]')) {
       if (!names.has(el)) delete el.dataset.tppUnreadName;
     }
+    for (const dot of document.querySelectorAll('[data-tpp-ui="rail-dot"]')) {
+      const next = dot.nextElementSibling;
+      if (!dot.isConnected || !next || next.dataset.tppUnreadName !== '1') dot.remove();
+    }
+  }
+
+  /**
+   * Draws the dot that says a channel has news, immediately before its name.
+   *
+   * It is a real element rather than a pseudo-element on Teams' own label: a
+   * `::before` there is the label's own slot, and Teams' markup is free to use
+   * it or hide it. Inserted before the name, it lands to the left of the text
+   * whatever the label is built from, and it can be removed cleanly.
+   */
+  function paintRailDot(name, unread) {
+    const previous = name.previousElementSibling;
+    const dot = previous && previous.dataset && previous.dataset.tppUi === 'rail-dot' ? previous : null;
+    if (!unread) {
+      if (dot) dot.remove();
+      return;
+    }
+    if (dot) return;
+    const mark = document.createElement('span');
+    mark.dataset.tppUi = 'rail-dot';
+    mark.className = 'tpp-rail-dot';
+    mark.setAttribute('aria-hidden', 'true');
+    name.before(mark);
   }
 
   /** The element that carries a channel row's name, remembered per row. */

@@ -679,11 +679,23 @@
     if (!features.manualRead) return isUnreadPost(row);
     const record = newState[id];
     if (record && record.n === 1) return true;
-    if (!isUnreadPost(row)) return false;
+    if (!isUnreadPost(row)) {
+      // The badge has gone. Whether it was showing when the card was opened is
+      // no longer the question: the next badge is one somebody put there, so it
+      // is news again.
+      if (record && record.f && record.b === 1) {
+        delete record.b;
+        saveNewSoon();
+      }
+      return false;
+    }
 
     // The badge is still showing on a post already opened: it stays read until
-    // the post moves past the fingerprint captured when it was opened.
-    if (record && record.f) {
+    // the post moves past the fingerprint captured when it was opened. A badge
+    // that was *not* showing then — Teams' own "Mark as unread", or a post that
+    // arrived since — is a new mark, and opening the card to reach Teams' menu
+    // must not swallow it.
+    if (record && record.f && record.b === 1) {
       const current = activityOf(row);
       if (!current || current === record.f) return false;
     }
@@ -704,7 +716,13 @@
     // the only marker then, and opening a card must not hide it.
     if (!features.manualRead) return;
     const fingerprint = activityOf(row);
-    setNewRecord(id, fingerprint ? { f: fingerprint } : {});
+    // Remember whether the badge was on screen as the card opened. A badge that
+    // shows up later is Teams' "Mark as unread" (the menu is only reachable once
+    // the post is open), so it has to count as new rather than as the badge the
+    // user just read past.
+    const value = fingerprint ? { f: fingerprint } : {};
+    if (isUnreadPost(row)) value.b = 1;
+    setNewRecord(id, value);
     delete row.dataset.tppNew;
 
     const card = row.querySelector(':scope > [data-tpp-ui="preview"]');

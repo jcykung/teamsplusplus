@@ -822,9 +822,10 @@
       const name = railNameOf(item);
       if (!name) continue;
       names.add(name);
-      // Teams may bold the label itself or the whole row around it, and which
-      // one carries the weight differs between builds: either is the cue.
-      const unread = isBold(name) || isBold(item);
+      // Teams may bold the label, a wrapper around it, or the row itself, and
+      // some builds mark unread with a badge or an aria label instead of
+      // weight: every one of those is read as the same cue.
+      const unread = isBoldUp(name, item) || hasUnreadMark(item);
       if (unread) {
         if (name.dataset.tppUnreadName !== '1') name.dataset.tppUnreadName = '1';
       } else if (name.dataset.tppUnreadName !== undefined) {
@@ -903,6 +904,41 @@
     } catch (_) {
       return false;
     }
+  }
+
+  /**
+   * Whether the name, or anything wrapping it up to its row, is drawn bold.
+   *
+   * Teams has put the weight in every one of those places across builds, and a
+   * bold wrapper with a plain label inside is the case a leaf-only check misses.
+   */
+  function isBoldUp(name, item) {
+    for (let el = name; el; el = el.parentElement) {
+      if (isBold(el)) return true;
+      if (el === item) break;
+    }
+    return false;
+  }
+
+  /**
+   * Whether a row carries Teams' own unread marker — a dot, a count or a badge,
+   * or an aria label that says so. Some builds cue the rail with one of these
+   * and no weight change at all, which is why the weight alone cannot be trusted.
+   */
+  function hasUnreadMark(item) {
+    const label = collapse(item.getAttribute('aria-label') || '');
+    if (/unread|new (?:post|message|activity)/i.test(label)) return true;
+    try {
+      for (const el of item.querySelectorAll(
+        '[data-tid*="unread" i], [data-tid*="new-message" i], [aria-label*="unread" i]'
+      )) {
+        if (el.closest('[data-tpp-ui]')) continue;
+        return true;
+      }
+    } catch (_) {
+      // No badge markup in this build: the weight is the only cue.
+    }
+    return false;
   }
 
   /**

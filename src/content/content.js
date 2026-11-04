@@ -181,6 +181,8 @@
   const unfolded = new Set();
   /** Set while a click we generated is in flight, so it is not read as the user's. */
   let forwardingClick = false;
+  /** The post opened most recently: Teams' own menu belongs to it. */
+  let lastOpenedRow = null;
   let rescanTimer = 0;
   let slowTimer = 0;
   /**
@@ -239,6 +241,15 @@
     if (forwardingClick) return;
     const target = event.target;
     if (!target || target.nodeType !== 1) return;
+    // Teams' own "Mark as unread" is the one certain signal that a post the user
+    // has read is being sent back to unread: Teams often leaves its badge in
+    // the row after the card was opened, so a badge showing is not proof of
+    // anything. The click is read here, before the menu's button is ignored.
+    if (features.manualRead && !features.inboxZero && isMarkUnreadItem(target)) {
+      const row = target.closest('.tpp-post') || lastOpenedRow;
+      if (row) markPostUnread(row);
+      return;
+    }
     if (
       target.closest(
         'button, a, input, textarea, select, [contenteditable="true"], .tpp-post-actions, [data-shortcut-context="compose-field"]'
@@ -266,7 +277,10 @@
     // Opening the card is what marks a post read in this view. Closing it again
     // is not: a post closed without being read stays New, and a post marked
     // unread in Teams' own menu reads when it is opened next.
-    if (open) markPostOpened(row);
+    if (open) {
+      lastOpenedRow = row;
+      markPostOpened(row);
+    }
     // Opening a post can put Teams' own divider back on screen, so which line
     // is shown is decided again at once — otherwise the copy stays beside it and
     // the post shows two. The row also changed height, so the line is re-measured.
@@ -734,6 +748,37 @@
       if (badge) badge.hidden = true;
     }
     saveNewSoon();
+  }
+
+  /** Is this click Teams' own "Mark as unread" menu item? */
+  function isMarkUnreadItem(target) {
+    const item = target.closest(
+      '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]'
+    );
+    if (!item) return false;
+    const words =
+      collapse(item.textContent || '') || collapse(item.getAttribute('aria-label') || '');
+    return /^mark\s+(?:as\s+)?unread$/i.test(words);
+  }
+
+  /**
+   * A read post sent back to unread by Teams' own menu.
+   *
+   * The click is taken as the decision itself: the Badge Teams keeps in the row
+   * after an open would otherwise read as the badge the user already read past,
+   * which is why an already-read post could not be put back to New. The mark is
+   * written and the card repainted at once, so the badge and the purple outline
+   * come back as soon as the menu closes.
+   */
+  function markPostUnread(row) {
+    const id = row && row.dataset.tppId;
+    if (!id || !features || !features.compactPosts || features.inboxZero) return;
+    if (!features.manualRead) return;
+    const fingerprint = activityOf(row);
+    setNewRecord(id, fingerprint ? { n: 1, f: fingerprint } : { n: 1 });
+    row.dataset.tppNew = '1';
+    paintPreview(row);
+    scheduleScan(true);
   }
 
   /** Writes one compact-view mark, newest last so trimming keeps recent ones. */

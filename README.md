@@ -78,9 +78,10 @@ count as reading it — so a channel says at a glance what has arrived. Turn the
 switch off and the cards follow Teams instead: the badge and purple border show
 while Teams marks the post new and clear when Teams marks it read.
 
-Marking a post unread from Teams' own menu brings the badge back the same way,
-and it stays until you open the card again — opening it to reach that menu is
-not what clears it, and closing it again does not either.
+Marking a post unread from Teams' own menu brings the badge and border back the
+same way, even on a post already marked read, and it stays until you open the
+card again — opening it to reach that menu is not what clears it, and closing it
+again does not either.
 
 The Compact posts switch lives in the popup, and its setting is stored in
 `chrome.storage.sync`, so it follows the user to every Chrome profile signed in

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Teams++",
   "short_name": "Teams++",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Compact post cards for Microsoft Teams channels — every post as a headline, one click to open.",
   "minimum_chrome_version": "116",
   "author": "Jonathan Kung",

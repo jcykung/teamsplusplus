@@ -107,9 +107,14 @@ Marking a post unread brings the badge and border back even on a post already
 marked read, and the card says **Unread** straight away — that mark is your
 decision, not an arrival, so it does not wait for Teams' own badge to clear.
 Opening the card again is the only thing that clears it — opening it to reach the
-menu is not what does, and closing it again is not either. Teams also marks
-every message newer than that one unread when it does this; this view does not
-follow it there, so those posts stay read unless they have moved on since.
+menu is not what does, and closing it again is not either. Teams marks the posts
+around that one unread as well when it does this, and it keeps them marked: the
+marks are the channel's, so they are still there after a reload. This view does
+not follow it there — the mark stays on the one post you chose, a bookmark to
+come back to. The rest stay read, whatever Teams badges on them. A post that
+arrives after the mark is newer than it and says **New** as usual, and one you
+have read here comes back if it has moved on since (a reply, a reaction, an
+attachment or an edit).
 
 The Compact posts switch lives in the popup, and its setting is stored in
 `chrome.storage.sync`, so it follows the user to every Chrome profile signed in

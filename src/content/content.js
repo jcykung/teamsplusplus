@@ -60,6 +60,14 @@
   const ACTIVITY_KEY = 'teamsPlusPlus.activity';
   const ACTIVITY_LIMIT = 300;
   /**
+   * The newest post each channel had when a post in it was marked unread, in
+   * local storage. A badge on anything stamped at or before that moment was
+   * already in the list when the user made the mark, so it is Teams' cascade and
+   * not news. One number per channel, so it costs almost nothing to keep.
+   */
+  const CASCADE_BASE_KEY = 'teamsPlusPlus.cascadeBase';
+  const CASCADE_BASE_LIMIT = 60;
+  /**
    * Channels whose unread dot is latched, in local storage: name -> 1.
    *
    * Teams clears its bold the moment a channel is opened, so by the time the
@@ -129,7 +137,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-05.163';
+  const BUILD = '2026-11-05.164';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -199,6 +207,10 @@
   let cascadeGuard = null;
   /** When that snapshot was taken, in ms: it is dropped once it is stale. */
   let cascadeGuardAt = 0;
+  /** channel -> the newest post stamp it had when a post there was marked unread. */
+  let cascadeBase = {};
+  /** The channel name the baseline is filed under, kept until the channel changes. */
+  let cascadeKeyCache = '';
   /** id -> the activity fingerprint taken when the post was last read. */
   let activityState = {};
   let activitySaveTimer = 0;
@@ -1005,7 +1017,7 @@
    * outright (markPostUnread), and the badge Teams puts back on the post being
    * read says the same thing when that press was missed.
    */
-  function refreshNewPost(id, row) {
+  function refreshNewPost(id, row, ts, base) {
     if (!id || !features || !features.compactPosts || features.inboxZero) return false;
     // With the switch off this view follows Teams: the badge and border show
     // while Teams marks the post new and clear when Teams marks it read, and
@@ -1046,6 +1058,19 @@
     ) {
       setNewRecord(id, { n: 1, u: 1, f: record.f });
       return true;
+    }
+
+    // A badge on a post that was already in the list when the user last marked a
+    // post unread in this channel: a hand mark is a bookmark, and the view does
+    // not follow Teams into marking the posts around it. The stamp decides — one
+    // that arrived after that moment is stamped later and is still news — and it
+    // is the part the guard above cannot reach, since Teams' cascade outlives
+    // the page and lands on rows this one never drew. Both stamps are asked, the
+    // post's own and the newest printed anywhere in its row, so a post answered
+    // since the mark is not the post that was there when it was made; and a post
+    // read here speaks for itself, so news after that read still comes back.
+    if (base && ts > 0 && ts <= base && activityStampOf(row) <= base) {
+      if (!record || !record.f || !movedOn(row, record.f)) return false;
     }
 
     // The badge is showing on a post already read: Teams leaves its badge in the
@@ -1181,7 +1206,9 @@
     // fingerprint is unchanged (a real reply still brings it back).
     cascadeGuard = {};
     cascadeGuardAt = Date.now();
+    let newest = 0;
     for (const other of document.querySelectorAll('.tpp-post')) {
+      newest = Math.max(newest, Number(other.dataset.tppTs) || 0);
       const otherId = other.dataset.tppId;
       // A post already showing a mark keeps it — including one Teams is still
       // badging that the next scan has not reached yet. Only the posts Teams is
@@ -1190,8 +1217,59 @@
       if (isUnreadPost(other)) continue;
       cascadeGuard[otherId] = activityOf(other);
     }
+    // How far the channel had got, written down: the guard above lives in this
+    // page and for two minutes, while Teams' cascade does not. See refreshNewPost.
+    rememberCascadeBase(newest);
     paintPreview(row);
     scheduleScan(true);
+  }
+
+  /**
+   * Remembers how far the channel had got when a post in it was marked unread.
+   *
+   * Teams marks the posts around the one chosen unread as well, and those marks
+   * are the channel's, not this page's: they are still there after a reload, on
+   * rows this page has not drawn yet. Holding them read therefore cannot depend
+   * on the guard taken at the click. The stamp can: anything stamped at or before
+   * the newest post of that moment was already in the list, so its badge is Teams
+   * answering the mark. A post that arrives afterwards is stamped later and is
+   * news, which is the whole distinction the view needs.
+   */
+  function rememberCascadeBase(newest) {
+    const key = cascadeKey();
+    if (!key || !newest) return;
+    delete cascadeBase[key];
+    cascadeBase[key] = newest;
+    const entries = Object.entries(cascadeBase);
+    if (entries.length > CASCADE_BASE_LIMIT) {
+      cascadeBase = Object.fromEntries(entries.slice(-CASCADE_BASE_LIMIT));
+    }
+    try {
+      chrome.storage.local.set({ [CASCADE_BASE_KEY]: cascadeBase }, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (_) {
+      // The extension was reloaded while this page stayed open.
+    }
+  }
+
+  /** The name a channel is filed under in the baseline map, read once per channel. */
+  function cascadeKey() {
+    if (cascadeKeyCache) return cascadeKeyCache;
+    const key = openRailKeys()[0] || lastChannelTitle || '';
+    // Empty is not an answer — the header can be mid-paint — so it is not kept.
+    if (key) cascadeKeyCache = key;
+    return key;
+  }
+
+  /** Keeps only well-formed baselines, newest last, under the cap. */
+  function normalizeCascadeBase(stored) {
+    if (!stored || typeof stored !== 'object') return {};
+    const entries = Object.entries(stored).filter(
+      ([key, value]) =>
+        typeof key === 'string' && key.length > 0 && typeof value === 'number' && value > 0
+    );
+    return Object.fromEntries(entries.slice(-CASCADE_BASE_LIMIT));
   }
 
   /** Writes one compact-view mark, newest last so trimming keeps recent ones. */
@@ -2728,6 +2806,9 @@
 
   function rebuildRows(list) {
     const next = new Map();
+    // Read once for the pass: the baseline is asked of every badged post, and
+    // finding the channel's name means walking the rail.
+    const base = cascadeBase[cascadeKey()] || 0;
 
     for (const row of collectRows(list, false)) {
       // A post Teams is drawing in one of its own panes — the view a channel
@@ -2800,7 +2881,7 @@
       // The compact view's own marker: a latched New badge keeps the card new
       // until its card is opened (markPostOpened), however soon Teams clears
       // its own badge.
-      if (refreshNewPost(id, row)) row.dataset.tppNew = '1';
+      if (refreshNewPost(id, row, ts, base)) row.dataset.tppNew = '1';
       else if (row.dataset.tppNew !== undefined) delete row.dataset.tppNew;
 
       setTag(row, isRead ? 'read' : '');
@@ -4285,8 +4366,10 @@
   function resetForChannelChange() {
     lastList = null;
     listRect = null;
-    // The guard was taken for the posts of the channel being left.
+    // The guard was taken for the posts of the channel being left, and the name
+    // the baseline is filed under is that channel's.
     cascadeGuard = null;
+    cascadeKeyCache = '';
   }
 
   // -------------------------------------------------------------- persistence
@@ -5196,6 +5279,7 @@
    */
   function teardownChannelUi() {
     uiDrawn = false;
+    cascadeKeyCache = '';
     perf.loadStartedAt = 0;
     settleTries = 0;
     listDirty = true;
@@ -5247,8 +5331,13 @@
     readState = normalizeMap(items[UNREAD_KEY], READ_LIMIT);
     newState = normalizeMap(items[NEW_POSTS_KEY], NEW_POST_LIMIT);
     try {
-      const local = await chrome.storage.local.get([ACTIVITY_KEY, RAIL_UNREAD_KEY]);
+      const local = await chrome.storage.local.get([
+        ACTIVITY_KEY,
+        RAIL_UNREAD_KEY,
+        CASCADE_BASE_KEY
+      ]);
       activityState = normalizeActivity(local && local[ACTIVITY_KEY]);
+      cascadeBase = normalizeCascadeBase(local && local[CASCADE_BASE_KEY]);
       // The rail dot is off in this release, so no latch is read back, and the
       // map an older build wrote is dropped: kept, it would dot the rail the
       // moment the feature is switched on again, from news long since read.
@@ -5259,6 +5348,7 @@
     } catch (_) {
       activityState = {};
       railUnread = {};
+      cascadeBase = {};
     }
 
     // Entries an older build inferred from Teams' "New" badge and "Last read"
@@ -5516,6 +5606,9 @@
     if (area === 'local') {
       if (changes[ACTIVITY_KEY]) {
         activityState = normalizeActivity(changes[ACTIVITY_KEY].newValue);
+      }
+      if (changes[CASCADE_BASE_KEY]) {
+        cascadeBase = normalizeCascadeBase(changes[CASCADE_BASE_KEY].newValue);
       }
       return;
     }

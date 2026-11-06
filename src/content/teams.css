@@ -15,6 +15,8 @@
   --tpp-purple: #6264a7;
   --tpp-purple-dark: #4b53a0;
   --tpp-purple-user: #8b5cf6;
+  /* The day's line: the same purple, kept light enough to read as a divider. */
+  --tpp-purple-lilac: #a78bfa;
   /* The folded post's card, and the neutral chrome around it. */
   --tpp-card-bg: #ffffff;
   --tpp-card-fg: #242424;
@@ -45,6 +47,7 @@ html[data-tpp-theme="light"] {
 }
 
 html[data-tpp-theme="dark"] {
+  --tpp-purple-lilac: #c4b5fd;
   --tpp-card-bg: #24242e;
   --tpp-card-fg: #f1f0f7;
   --tpp-card-line: rgba(168, 174, 255, 0.3);
@@ -665,31 +668,37 @@ html[data-tpp-compact-posts] .tpp-post .tpp-preview.tpp-preview-unread {
 }
 
 /*
- * A channel with news in the left rail stays bold and carries a purple dot to the
- * left of its name. Teams shows that state only as a bold font weight, so
+ * A channel with news in the left rail stays bold and carries a purple dot in
+ * the line of its name. Teams shows that state only as a bold font weight, so
  * content.js reads the weight and sets the mark (paintChannelRail); this draws
  * it. The name keeps Teams' own colour — the dot is the cue, not a recoloured
- * label — and the mark follows the weight, so the dot goes when Teams counts the
- * channel as read.
+ * label — and the mark is latched, so the dot is still there when the channel is
+ * opened and leaves only once its posts have been read.
+ *
+ * The flag is part of both selectors on purpose: the dot is not in this
+ * release, so the feature is pinned off in features.js and the attribute is
+ * never set. The styles stay here, ready for when it is switched back on,
+ * and nothing a stale page or an older build left behind is drawn meanwhile.
  */
-html[data-tpp-compact-posts] [data-tpp-unread-name] {
+html[data-tpp-compact-posts][data-tpp-rail-dot] [data-tpp-unread-name] {
   font-weight: 600 !important;
 }
 
 /*
- * The dot is a real element, inserted immediately before the name by
- * paintChannelRail, so it needs no pseudo-element slot on Teams' own label and
- * shows up whatever that label is built from.
+ * The dot is a real element, put inside the name by paintChannelRail, so it is
+ * inline with the label: the same line box as the text, wrapped with it, and no
+ * line or block gap of its own. As a sibling of the name it was a flex item in
+ * Teams' row, and laid out beside the label's box it pushed the text along.
  */
-html[data-tpp-compact-posts] [data-tpp-ui="rail-dot"] {
+html[data-tpp-compact-posts][data-tpp-rail-dot] [data-tpp-ui="rail-dot"] {
   display: inline-block !important;
   flex: none !important;
-  align-self: center !important;
+  position: static !important;
   width: 7px !important;
   min-width: 7px !important;
   height: 7px !important;
   min-height: 7px !important;
-  margin-right: 6px !important;
+  margin: 0 6px 0 0 !important;
   padding: 0 !important;
   border-radius: 50% !important;
   background: var(--tpp-purple-user) !important;
@@ -901,6 +910,52 @@ html[data-tpp-compact-posts] .tpp-post.tpp-last-read-row {
   font: 400 12px/1.4 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
   letter-spacing: normal;
   text-transform: none;
+}
+
+/*
+ * The day's line: the seam above, in the light purple, with the date in it. It
+ * ends the last post of a day, so the posts under it read as that day's run.
+ * refreshDaySeparators (content.js) decides which post ends a day and writes the
+ * label; placeSeam puts it in the gap the same way the "Last read" line is put
+ * there, which is why the two share every measurement.
+ */
+.tpp-day-sep {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--tpp-purple-lilac);
+}
+
+html[data-tpp-compact-posts] .tpp-post.tpp-previewed .tpp-day-sep {
+  display: flex !important;
+}
+
+/* The same band as the read line, for the same reason: a line needs air. */
+html[data-tpp-compact-posts] .tpp-post.tpp-day-row {
+  padding-bottom: 26px !important;
+}
+
+.tpp-day-line {
+  flex: 1 1 0;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.tpp-day-label {
+  flex: none;
+  font: 600 11.5px/1.4 Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 /* Keyboard users get the same card, outlined in the same purple. */

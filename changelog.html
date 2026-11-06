@@ -294,23 +294,55 @@
       <div class="subtitle">What's new and improved in Teams++</div>
 
       <ul class="timeline">
-        <!-- v1.0.2 -->
+        <!-- v1.0.3 -->
         <li class="timeline-item latest">
           <div class="timeline-marker"></div>
           <div class="timeline-header">
-            <h2 class="version-title">v1.0.2</h2>
+            <h2 class="version-title">v1.0.3</h2>
             <span class="version-date">November 2026</span>
             <span class="badge badge-latest">Current</span>
           </div>
           <ul class="change-list">
             <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>Marking a post unread is immediate:</strong> A post you mark unread now comes back as <strong>Unread</strong> with its purple border straight away, instead of waiting for Teams' own badge to change. The menu press is read the moment you make it, and the badge Teams puts back on the post you have open is taken as the same mark.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>Opening a card stays read:</strong> Opening a card clears its badge and border, and they stay cleared — Teams drawing its own badge again as it re-renders the row no longer brings the mark back.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>Only the post you marked comes back:</strong> Teams also marks every message newer than the one you mark unread; those cards stay read here, wherever the mark was made from.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>Ready for the Chrome Web Store:</strong> The welcome screen, README and a published privacy policy now state plainly that Teams++ collects nothing, makes no network requests and runs only after you grant Teams access.
+            </li>
+          </ul>
+        </li>
+
+        <!-- v1.0.2 -->
+        <li class="timeline-item">
+          <div class="timeline-marker"></div>
+          <div class="timeline-header">
+            <h2 class="version-title">v1.0.2</h2>
+            <span class="version-date">November 2026</span>
+          </div>
+          <ul class="change-list">
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>New while Teams says new, then Unread:</strong> A folded card says <strong>New</strong> for as long as Teams still marks the post new. When Teams clears that badge the card says <strong>Unread</strong> in its place and keeps its purple border, so the post still waits for you to open it — reading it somewhere else in Teams no longer hides that it has not been read here.
+            </li>
+            <li class="change-item">
               <span class="badge-tag tag-improve">IMPROVE</span><strong>Manually mark as read is a switch:</strong> The popup has a new <strong>Manually mark as read</strong> switch, on by default, which turns the click-to-read rule on or off. With it off, a folded card follows Teams: the <strong>New</strong> badge and purple border show while Teams marks the post new and clear when Teams marks it read.
             </li>
             <li class="change-item">
-              <span class="badge-tag tag-improve">IMPROVE</span><strong>A purple dot for channels with news:</strong> A channel with unread posts stays bold in the left rail and now carries a purple dot to the left of its name, instead of turning the whole name purple — the same purple as a new post's card, without recolouring Teams' own text.
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>A line and a date between each day's posts:</strong> The posts are split by day with a light purple line carrying the date — <strong>Today</strong>, <strong>Yesterday</strong>, then the day's name — drawn where Teams' own <strong>Last read</strong> line goes, so a day's posts read as one run. A post lifted back up by a reply is filed under the day it came back, not the day it was written.
             </li>
             <li class="change-item">
-              <span class="badge-tag tag-fix">FIX</span><strong>The purple dot reaches the channel list:</strong> Teams' current rail gives its rows no <code>data-tid</code>, so the dot was never placed. Channel rows are found by their role instead, and the channels nested inside each group are read rather than the groups themselves.
+              <span class="badge-tag tag-fix">FIX</span><strong>Unread marks stay put:</strong> A post you have opened no longer comes back as New because Teams left its own badge in the row, or put one back on every message newer than one marked unread.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>One post at a time:</strong> Marking a post unread no longer marks every message newer than it unread here: those cards stay read, and only the one you marked comes back, saying <strong>Unread</strong> straight away with its purple border, until you open it again.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>Posts fold when you change channel:</strong> Whatever you had opened in one channel is condensed again, so arriving in the next channel — or coming back to one you left — always shows it as a list of cards.
             </li>
             <li class="change-item">
               <span class="badge-tag tag-fix">FIX</span><strong>Marking a post unread sticks:</strong> Choosing Teams' own <strong>Mark as unread</strong> used to be undone the moment you opened the card to reach the menu. A post marked unread now keeps its <strong>New</strong> badge and purple border until you open its card again.

@@ -59,6 +59,33 @@
    */
   const ACTIVITY_KEY = 'teamsPlusPlus.activity';
   const ACTIVITY_LIMIT = 300;
+  /**
+   * Channels whose unread dot is latched, in local storage: name -> 1.
+   *
+   * Teams clears its bold the moment a channel is opened, so by the time the
+   * posts are on screen the name no longer says whether anything in it was
+   * read. The first cue is written down here instead, and the dot stands until
+   * the posts it stands for have been opened (settleRailUnread). It is read
+   * from what Teams drew on this device rather than a decision the user made,
+   * so it stays local, like the activity fingerprints.
+   */
+  const RAIL_UNREAD_KEY = 'teamsPlusPlus.railUnread';
+  const RAIL_UNREAD_LIMIT = 200;
+  /**
+   * How long a manual-unread snapshot is trusted, in ms. Teams badges the newer
+   * posts as the menu closes, so a couple of minutes covers a slow render and
+   * still lets the snapshot go.
+   */
+  const CASCADE_GUARD_MS = 120000;
+  /**
+   * How long after a post is read by opening its card a Teams badge on it is
+   * still the one Teams draws again as it re-renders the row. Past this, a
+   * badge on the post being read was put there by hand: Teams' own "Mark as
+   * unread".
+   */
+  const REOPEN_GRACE_MS = 1200;
+  /** How long after a press a Teams badge still counts as Teams' answer to it. */
+  const BADGE_AFTER_PRESS_MS = 4000;
 
   const VIEW_INBOX = 'inbox';
   const VIEW_ARCHIVES = 'archives';
@@ -91,7 +118,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-03.145';
+  const BUILD = '2026-11-04.159';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -127,6 +154,8 @@
     '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
   /** The channel header watched for a channel change (see watchChannelTitle). */
   let titleEl = null;
+  /** The channel title last seen, so only a real switch folds the posts. */
+  let lastChannelTitle = null;
   let titleObserver = null;
 
   /** When the message list first went missing, in ms, or 0 while it is there. */
@@ -149,9 +178,34 @@
    */
   let newState = {};
   let newSaveTimer = 0;
+  /**
+   * id -> activity fingerprint, taken when a post was marked unread by hand.
+   *
+   * Teams marks every message newer than the one chosen as unread as well. Those
+   * posts had been read, so a badge that arrives with the fingerprint unchanged
+   * is Teams' bookkeeping and not news, and is held read (see refreshNewPost).
+   */
+  let cascadeGuard = null;
+  /** When that snapshot was taken, in ms: it is dropped once it is stale. */
+  let cascadeGuardAt = 0;
   /** id -> the activity fingerprint taken when the post was last read. */
   let activityState = {};
   let activitySaveTimer = 0;
+  /** name -> 1 while that channel's dot is latched: see paintChannelRail. */
+  let railUnread = {};
+  let railSaveTimer = 0;
+  /** Whether Teams was cueing each channel's row in the latest rail pass. */
+  let railCued = new Map();
+  /**
+   * Channels whose dot the posts have already answered while Teams kept
+   * drawing its cue: see paintChannelRail. A cue read again there must not
+   * latch a dot the user just cleared, or the dot comes straight back.
+   */
+  const railSettled = new Set();
+  /** name -> when a weight first looked like a cue: see paintChannelRail. */
+  let railPending = new Map();
+  /** A pending second look at a channel's dot: see scheduleRailSettle. */
+  let railSettleTimer = 0;
   /** When the extension was installed, in ms. Posts stamped later are unread. */
   let since = 0;
   let view = VIEW_INBOX;
@@ -169,6 +223,8 @@
 
   /** id -> { row, id, text, author, read, ts } for the latest scan. */
   let rowsById = new Map();
+  /** The names of the channel those rows were read from: see settleRailUnread. */
+  let rowsKeys = [];
 
   let observer = null;
   let lastList = null;
@@ -183,6 +239,21 @@
   let forwardingClick = false;
   /** The post opened most recently: Teams' own menu belongs to it. */
   let lastOpenedRow = null;
+  /**
+   * The post the pointer was last over. Teams' hover toolbar carries the button
+   * that opens the message menu, and the menu itself is drawn outside the row,
+   * so the post a press in it belongs to is the one that was last hovered.
+   */
+  let lastHoveredRow = null;
+  /**
+   * When the pointer was last pressed, in ms. A badge that arrives while the
+   * user is clicking is Teams answering something they did; one that turns up
+   * with no press around it is Teams re-drawing its own state (see
+   * refreshNewPost).
+   */
+  let lastPointerAt = 0;
+  /** When a manual unread was written, in ms: a press and its click are one. */
+  let manualMarkAt = 0;
   let rescanTimer = 0;
   let slowTimer = 0;
   /**
@@ -241,15 +312,10 @@
     if (forwardingClick) return;
     const target = event.target;
     if (!target || target.nodeType !== 1) return;
-    // Teams' own "Mark as unread" is the one certain signal that a post the user
-    // has read is being sent back to unread: Teams often leaves its badge in
-    // the row after the card was opened, so a badge showing is not proof of
-    // anything. The click is read here, before the menu's button is ignored.
-    if (features.manualRead && !features.inboxZero && isMarkUnreadItem(target)) {
-      const row = target.closest('.tpp-post') || lastOpenedRow;
-      if (row) markPostUnread(row);
-      return;
-    }
+    // Teams' own menu is drawn outside the row, so the post the user is working
+    // on is the one their last click landed in — not always the one last opened.
+    const rowOfClick = target.closest('.tpp-post');
+    if (rowOfClick) lastOpenedRow = rowOfClick;
     if (
       target.closest(
         'button, a, input, textarea, select, [contenteditable="true"], .tpp-post-actions, [data-shortcut-context="compose-field"]'
@@ -264,6 +330,55 @@
     // message, a dialog — is not ours to fold, whatever a scan left on it.
     if (inTeamsPane(row)) return;
     toggleUnfold(row);
+  }
+
+  /**
+   * Teams' own "Mark as unread", read on the press and again on the click.
+   *
+   * The item lives in a menu Teams draws outside the post row, and that menu can
+   * go away on the press itself — taking the click with it — so the item is
+   * tested on the way down as well as on the click, and markPostUnread writes the
+   * mark only once for the pair. The post the menu belongs to is the one the
+   * press landed in, or — the menu and its toolbar being drawn outside the row
+   * in some builds — the one the pointer last hovered, which is what put the
+   * toolbar that opened it on screen.
+   */
+  function onUnreadMenuPress(event) {
+    if (!ready || !channelMode || !features || !features.compactPosts) return;
+    if (!features.manualRead || features.inboxZero) return;
+    const target = event.target;
+    if (!target || target.nodeType !== 1) return;
+    const row = target.closest('.tpp-post');
+    if (row) lastOpenedRow = row;
+    if (!isMarkUnreadItem(target)) return;
+    // The menu was opened on a row that Teams may have replaced since; the post
+    // is found by id then. A press in the menu is not in the row, and the
+    // toolbar that opened it need not be either, so the post last hovered names
+    // the one being acted on — the post opened earlier can be a different one.
+    // A post holding the keyboard is the last fallback.
+    let marked = row || lastHoveredRow || lastOpenedRow;
+    if (marked && !marked.isConnected) {
+      marked = marked.dataset.tppId ? findRow(marked.dataset.tppId) : null;
+    }
+    if (!marked) {
+      const active = document.activeElement;
+      marked = active && active.closest ? active.closest('.tpp-post') : null;
+    }
+    if (!marked) return;
+    markPostUnread(marked);
+  }
+
+  /** Remembers when the pointer was last pressed: see lastPointerAt. */
+  function onAnyPointerDown() {
+    lastPointerAt = Date.now();
+  }
+
+  /** Remembers the post the pointer is over: its toolbar opens Teams' menu. */
+  function onPostHover(event) {
+    const target = event.target;
+    if (!target || target.nodeType !== 1) return;
+    const row = target.closest('.tpp-post');
+    if (row) lastHoveredRow = row;
   }
 
   /** Folds one post, or unfolds it again if it is already open. */
@@ -291,6 +406,21 @@
     if (open) focusPostMessage(row);
     // The post changed height, so anything placed against it is re-measured.
     reposition();
+  }
+
+  /**
+   * Folds every open post and forgets them.
+   *
+   * Coming back to a channel should show it the way it was before anything was
+   * opened: a list of cards. The ids matter more than the classes — a row Teams
+   * re-renders is folded from the set — so they are dropped first.
+   */
+  function foldOpenPosts() {
+    unfolded.clear();
+    lastOpenedRow = null;
+    for (const row of document.querySelectorAll('.tpp-post.tpp-unfold')) {
+      row.classList.remove('tpp-unfold');
+    }
   }
 
   /**
@@ -583,6 +713,12 @@
     // the card carries them. With Inbox Zero on, the Inbox and Archive tabs are
     // the marker instead, and these would contradict them.
     const unread = !features.inboxZero && row.dataset.tppNew === '1';
+    // The word follows Teams' own badge: New while it is still on the post,
+    // then Unread once Teams has cleared it and the mark is ours alone. A post
+    // marked unread by hand says Unread whatever Teams shows: that was a
+    // decision, not an arrival. The purple edge stays either way, until the
+    // card is opened.
+    const badgeText = unread ? badgeWordOf(row) : '';
     const lastRead = !features.inboxZero && endsLastRead(row);
 
     // A card already drawn is left alone unless the post's author, time, words
@@ -602,7 +738,13 @@
     // A new post reads as new on the card itself: a bright purple edge rather
     // than the usual hairline. Written before the "nothing changed" return so a
     // card painted by an older build is corrected on the next paint too.
-    if (card) card.classList.toggle('tpp-preview-unread', unread);
+    if (card) {
+      card.classList.toggle('tpp-preview-unread', unread);
+      // Painted before the fingerprint check: Teams clearing its own badge
+      // leaves the card unread but changes nothing else in it, and that is
+      // exactly the moment the word has to change from New to Unread.
+      paintCardBadge(card, badgeText);
+    }
     if (card && row.dataset.tppCardOf === signature) {
       if (!row.classList.contains('tpp-previewed')) row.classList.add('tpp-previewed');
       return;
@@ -668,9 +810,37 @@
     const snippetSlot = card.querySelector('.tpp-preview-snippet');
     snippetSlot.textContent = snippet;
     snippetSlot.hidden = !snippet;
-    card.querySelector('.tpp-preview-new').hidden = !unread;
+    paintCardBadge(card, badgeText);
     paintLastRead(row, lastRead);
     row.classList.add('tpp-previewed');
+  }
+
+  /**
+   * Writes the word on the card's read mark: Teams' **New** while Teams still
+   * shows its own badge, and **Unread** once Teams has cleared it and the mark
+   * stands on our rule alone. An empty word hides the mark; the purple border is
+   * the card class's business, not this one's.
+   */
+  function paintCardBadge(card, text) {
+    const badge = card && card.querySelector('.tpp-preview-new');
+    if (!badge) return;
+    badge.hidden = !text;
+    if (text && badge.textContent !== text) badge.textContent = text;
+  }
+
+  /**
+   * The word on the card's read mark.
+   *
+   * **New** for as long as Teams' own badge is on the post. **Unread** once
+   * Teams has cleared it and only our mark is left — and always for a post the
+   * user marked unread themselves, whatever Teams is showing: that mark is a
+   * decision, and it stands until the card is opened.
+   */
+  function badgeWordOf(row) {
+    const id = row.dataset.tppId;
+    const record = id ? newState[id] : null;
+    if (record && record.u === 1) return 'Unread';
+    return isUnreadPost(row) ? 'New' : 'Unread';
   }
 
   /** Whether Teams marks this post as unread. */
@@ -685,7 +855,10 @@
    * channel is opened — so the first sighting is latched here, and the post
    * keeps its badge and border until the user opens its card. A post that has
    * been opened comes back only when the post itself has moved on (a reply,
-   * reaction, attachment or edit), which is what a bumped post looks like.
+   * reaction, attachment or edit), which is what a bumped post looks like — or
+   * when it is marked unread again by hand: the menu press writes the mark
+   * outright (markPostUnread), and the badge Teams puts back on the post being
+   * read says the same thing when that press was missed.
    */
   function refreshNewPost(id, row) {
     if (!id || !features || !features.compactPosts || features.inboxZero) return false;
@@ -695,28 +868,60 @@
     if (!features.manualRead) return isUnreadPost(row);
     const record = newState[id];
     if (record && record.n === 1) return true;
-    if (!isUnreadPost(row)) {
-      // The badge has gone. Whether it was showing when the card was opened is
-      // no longer the question: the next badge is one somebody put there, so it
-      // is news again.
-      if (record && record.f && record.b === 1) {
-        delete record.b;
-        saveNewSoon();
+    if (!isUnreadPost(row)) return false;
+
+    // A post that was read when another was marked unread: the badge Teams just
+    // put on it belongs to that marking, not to this post. The fingerprint taken
+    // at the click decides — if the post has not moved on, it is still read, and
+    // that is written down so the badge cannot come back later either.
+    if (cascadeGuard && Object.prototype.hasOwnProperty.call(cascadeGuard, id)) {
+      const held = cascadeGuard[id];
+      delete cascadeGuard[id];
+      if (!held || !movedOn(row, held)) {
+        setNewRecord(id, held ? { f: held } : {});
+        return false;
       }
-      return false;
+    }
+    if (cascadeGuard && Date.now() - cascadeGuardAt > CASCADE_GUARD_MS) cascadeGuard = null;
+
+    // A badge on the post the user has open, long enough after it was opened
+    // that it is not the one Teams draws again as it re-renders the row: Teams
+    // has put its badge back by hand — its own "Mark as unread" — and the card
+    // says Unread for it, the way it does for a mark made from the menu.
+    if (
+      record &&
+      record.f &&
+      !movedOn(row, record.f) &&
+      unfolded.has(id) &&
+      // Matched by id: Teams re-renders the row, so the node these point at is
+      // not always the one being painted.
+      (id === idOfNode(lastOpenedRow) || id === idOfNode(lastHoveredRow)) &&
+      Date.now() - (record.t || 0) >= REOPEN_GRACE_MS &&
+      Date.now() - lastPointerAt <= BADGE_AFTER_PRESS_MS
+    ) {
+      setNewRecord(id, { n: 1, u: 1, f: record.f });
+      return true;
     }
 
-    // The badge is still showing on a post already opened: it stays read until
-    // the post moves past the fingerprint captured when it was opened. A badge
-    // that was *not* showing then — Teams' own "Mark as unread", or a post that
-    // arrived since — is a new mark, and opening the card to reach Teams' menu
-    // must not swallow it.
-    if (record && record.f && record.b === 1) {
-      const current = activityOf(row);
-      if (!current || current === record.f) return false;
-    }
+    // The badge is showing on a post already read: Teams leaves its badge in the
+    // row after an open, and draws one again when it re-renders the post. That
+    // is not news, so the post only comes back when it has moved past the
+    // fingerprint captured when it was read. A mark the user makes by hand does
+    // not go through here: it writes the record itself and is kept.
+    if (record && record.f && !movedOn(row, record.f)) return false;
     setNewRecord(id, record && record.f ? { n: 1, f: record.f } : { n: 1 });
     return true;
+  }
+
+  /** The post id a row carries, or an empty string. */
+  function idOfNode(row) {
+    return (row && row.dataset && row.dataset.tppId) || '';
+  }
+
+  /** Whether a post's replies, reactions, attachments or words changed since `held`. */
+  function movedOn(row, held) {
+    const current = activityOf(row);
+    return Boolean(current) && current !== held;
   }
 
   /**
@@ -732,33 +937,73 @@
     // the only marker then, and opening a card must not hide it.
     if (!features.manualRead) return;
     const fingerprint = activityOf(row);
-    // Remember whether the badge was on screen as the card opened. A badge that
-    // shows up later is Teams' "Mark as unread" (the menu is only reachable once
-    // the post is open), so it has to count as new rather than as the badge the
-    // user just read past.
-    const value = fingerprint ? { f: fingerprint } : {};
-    if (isUnreadPost(row)) value.b = 1;
-    setNewRecord(id, value);
+    // Opening the card is the whole decision. The fingerprint is kept so Teams'
+    // badge — left in the row, or drawn again on the next render — cannot bring
+    // the mark back: only the post moving on does that, or the user putting the
+    // badge back by hand (refreshNewPost). `t` is when the read happened: the
+    // re-drawn badge arrives in the moment after it, a hand-made mark later.
+    const now = Date.now();
+    setNewRecord(id, fingerprint ? { f: fingerprint, t: now } : { t: now });
     delete row.dataset.tppNew;
 
     const card = row.querySelector(':scope > [data-tpp-ui="preview"]');
     if (card) {
       card.classList.remove('tpp-preview-unread');
-      const badge = card.querySelector('.tpp-preview-new');
-      if (badge) badge.hidden = true;
+      paintCardBadge(card, '');
     }
     saveNewSoon();
   }
 
-  /** Is this click Teams' own "Mark as unread" menu item? */
+  /**
+   * Is this press Teams' own "Mark as unread" menu item?
+   *
+   * The item's words can be the label alone, the label followed by a keyboard
+   * shortcut, or an aria-label with nothing readable beside it, so both are read
+   * and the two words are looked for anywhere in them. "Mark all as unread" is a
+   * different action on a different set of posts, and is left to Teams.
+   */
   function isMarkUnreadItem(target) {
+    const item = menuItemOf(target);
+    if (!item || item.closest('[data-tpp-ui]')) return false;
+    return readsAsMarkUnread(item);
+  }
+
+  /** Whether an element's own words name Teams' "Mark as unread" item. */
+  function readsAsMarkUnread(el) {
+    const label = collapse(el.getAttribute('aria-label') || '');
+    const text = collapse(el.textContent || '');
+    const words = `${label} ${text}`.trim();
+    if (!words || /\ball\b/i.test(words)) return false;
+    return /\bmark\b[^]{0,32}\bunread\b/i.test(words);
+  }
+
+  /**
+   * The row of the open menu a press landed in, or null when it is not in one.
+   *
+   * The item role is the answer when Teams gives one. Some builds draw the
+   * menu without item roles, so the smallest box between the press and the
+   * menu's own edge whose words name the item is taken instead. Without one of
+   * the two the press was never recognised at all, and the badge Teams puts
+   * back was left to the scan to swallow.
+   */
+  function menuItemOf(target) {
     const item = target.closest(
-      '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]'
+      '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"]'
     );
-    if (!item) return false;
-    const words =
-      collapse(item.textContent || '') || collapse(item.getAttribute('aria-label') || '');
-    return /^mark\s+(?:as\s+)?unread$/i.test(words);
+    if (item) return item;
+
+    const menu = target.closest(
+      '[role="menu"], [role="listbox"], [role="dialog"], [data-tid*="menu" i], [data-tid*="contextual" i]'
+    );
+    if (!menu) return null;
+
+    for (let node = target; node && node !== menu; node = node.parentElement) {
+      // A row that holds a submenu is the submenu's parent, not the item
+      // pressed: the walk keeps going until it reaches what was clicked.
+      if (node.querySelector(':scope > [role="menu"]')) continue;
+      if (readsAsMarkUnread(node)) return node;
+    }
+    return null;
   }
 
   /**
@@ -774,9 +1019,32 @@
     const id = row && row.dataset.tppId;
     if (!id || !features || !features.compactPosts || features.inboxZero) return;
     if (!features.manualRead) return;
+    // The press and the click that follows it are one action, so only the first
+    // writes the mark: the second would take the snapshot after Teams had
+    // already badged the posts below.
+    const now = Date.now();
+    if (now - manualMarkAt < 500) return;
+    manualMarkAt = now;
     const fingerprint = activityOf(row);
-    setNewRecord(id, fingerprint ? { n: 1, f: fingerprint } : { n: 1 });
+    // `u` is the user's own mark: the card says Unread for it however Teams
+    // labels the post, and only opening the card clears it.
+    setNewRecord(id, fingerprint ? { n: 1, u: 1, f: fingerprint } : { n: 1, u: 1 });
     row.dataset.tppNew = '1';
+    // Teams answers by marking every message newer than this one unread too.
+    // Those posts are not news — they were read before the click — so what each
+    // one looked like is taken now, and refreshNewPost holds it read while its
+    // fingerprint is unchanged (a real reply still brings it back).
+    cascadeGuard = {};
+    cascadeGuardAt = Date.now();
+    for (const other of document.querySelectorAll('.tpp-post')) {
+      const otherId = other.dataset.tppId;
+      // A post already showing a mark keeps it — including one Teams is still
+      // badging that the next scan has not reached yet. Only the posts Teams is
+      // about to badge are pinned, and the row itself is not one of them.
+      if (!otherId || otherId === id || other.dataset.tppNew === '1') continue;
+      if (isUnreadPost(other)) continue;
+      cascadeGuard[otherId] = activityOf(other);
+    }
     paintPreview(row);
     scheduleScan(true);
   }
@@ -798,21 +1066,36 @@
    *
    * Teams bolds a channel's name in the left rail when it has news, and there is
    * no attribute to hang a CSS rule on: the weight is computed. So the bold name
-   * is found here and marked, and teams.css draws a dot beside it. The mark is
-   * cleared the moment the name is no longer bold, so reading the channel takes
-   * the dot with it. Runs at most once a second: the rail only changes when
-   * Teams says a channel has news or the user reads one.
+   * is found here and marked, and teams.css draws a dot in its line. That bold
+   * is only the arrival signal — Teams clears it as soon as the channel is
+   * opened — so the cue is latched here and the dot goes only once the posts
+   * have been opened (settleRailUnread). Runs at most once a second: the rail
+   * only changes when Teams says a channel has news or the user reads one.
    */
   function paintChannelRail() {
     if (!features || !features.compactPosts) return;
     const now = Date.now();
     if (now - channelRailAt < 1000) return;
     channelRailAt = now;
+    // The channel dot is not in this release: its switch is pinned off in
+    // features.js, so the rail is not read and all this pass does is take down
+    // what a build that had it left behind. Without that, a name still
+    // carrying the old bold and its dot would keep both until Teams happened
+    // to re-render that row. Once a second is enough for something nothing on
+    // the page adds to any more.
+    if (!features.railDot) {
+      stripRailMarks();
+      return;
+    }
 
     const selector = (S.channelItem || []).join(',');
     if (!selector) return;
 
     const names = new Set();
+    let latched = false;
+    railCued = new Map();
+    const pending = new Map();
+    const rows = [];
     for (const item of document.querySelectorAll(selector)) {
       // Teams nests its channel rows inside group rows (Favourites, and the
       // sections below it) that carry the same role. The inner row is the
@@ -822,10 +1105,67 @@
       const name = railNameOf(item);
       if (!name) continue;
       names.add(name);
-      // Teams may bold the label, a wrapper around it, or the row itself, and
-      // some builds mark unread with a badge or an aria label instead of
-      // weight: every one of those is read as the same cue.
-      const unread = isBoldUp(name, item) || hasUnreadMark(item);
+      rows.push({
+        name,
+        // A marked name carries our own 600 weight, so it cannot be asked what
+        // Teams draws — it would always answer bold, and the dot would never
+        // come down. Teams' badge and aria-label cues are its own alone.
+        marked: name.dataset.tppUnreadName === '1',
+        // The open channel's row is drawn semibold for being selected, which is
+        // not news. Read as a cue, it latched a dot on every channel the user
+        // merely visited — and because that row stays bold while it is on
+        // screen, settleRailUnread could never take the dot down again.
+        current: isCurrentRailRow(item),
+        badge: hasUnreadMark(item),
+        // Teams bolds the label, a wrapper around it, or the row itself across
+        // builds, and a build may mark unread with a badge instead of weight.
+        bold: isBoldUp(name, item),
+        key: collapse(name.textContent || '')
+      });
+    }
+    // A rail drawn semibold in a theme or a build bolds every row, and then the
+    // weight says nothing about any one of them: read as unread, it put a dot on
+    // every channel, each one leaving only when it was clicked. When every row
+    // carries the weight, none of them does.
+    const weightIsBase =
+      rows.length > 1 && rows.every((row) => row.badge || row.marked || row.bold);
+
+    for (const row of rows) {
+      const { name, marked, current, badge, key } = row;
+      const raw = badge || (!weightIsBase && !current && !marked && row.bold);
+      // A cue the channel's posts have already answered stays answered while
+      // Teams keeps drawing the row the same way. Releasing a dot and letting
+      // that same weight latch it again in the next pass is a dot that never
+      // clears, and the cue outliving its posts is exactly what put dots on
+      // channels with nothing in them. The memory ends as soon as Teams lets go
+      // of the row, so the next cue drawn there is news again.
+      if (key && !raw) railSettled.delete(key);
+      const cued = raw && !(key && railSettled.has(key));
+      if (key) railCued.set(key, cued);
+      // The cue is Teams' word that something arrived, not that it was read: it
+      // is written down, so opening the channel — which takes the bold with it,
+      // before a single post was read — leaves the dot standing. Newest last, so
+      // trimming keeps recent channels.
+      //
+      // A badge is taken at once. A weight is asked twice, a second apart: Teams
+      // paints a row semibold for reasons that are not news — a row being
+      // selected, a rail that is still rendering, a tooltip — and each of those
+      // left a dot on a channel with nothing in it, which only opening the
+      // channel could take away again.
+      if (cued && key && !railUnread[key]) {
+        const since = railPending.get(key);
+        if (badge || (since && now - since >= 600)) {
+          delete railUnread[key];
+          railUnread[key] = { r: badge ? 'badge' : 'bold', t: now };
+          latched = true;
+        } else {
+          pending.set(key, since || now);
+        }
+      }
+      // The dot follows the latch, not the pass: a mark that has not been
+      // confirmed yet paints nothing, so a bold that lasts one pass cannot
+      // flicker a dot onto a channel and back off again.
+      const unread = key ? Boolean(railUnread[key]) : cued;
       if (unread) {
         if (name.dataset.tppUnreadName !== '1') name.dataset.tppUnreadName = '1';
       } else if (name.dataset.tppUnreadName !== undefined) {
@@ -833,29 +1173,52 @@
       }
       paintRailDot(name, unread);
     }
+    if (latched) saveRailSoon();
 
     // A row Teams has replaced leaves its mark, or our dot, on a detached or
     // renamed node; this is the cheap way to keep the page free of them.
     for (const el of document.querySelectorAll('[data-tpp-unread-name]')) {
       if (!names.has(el)) delete el.dataset.tppUnreadName;
     }
+    // The dot now lives inside the name, so the name carrying the mark is what
+    // keeps it; anything else is a leftover (including a dot an older build
+    // inserted beside the name).
     for (const dot of document.querySelectorAll('[data-tpp-ui="rail-dot"]')) {
-      const next = dot.nextElementSibling;
-      if (!dot.isConnected || !next || next.dataset.tppUnreadName !== '1') dot.remove();
+      const host = dot.parentElement;
+      if (!dot.isConnected || !host || host.dataset.tppUnreadName !== '1') dot.remove();
+    }
+    // Only rows that are still cued this pass wait for a second look.
+    railPending = pending;
+  }
+
+  /**
+   * Takes the rail dot's marks off the page.
+   *
+   * Nothing repaints them while the feature is off, so the bold name and the
+   * dot an older build drew have to be removed here or they would look like a
+   * feature that is still on.
+   */
+  function stripRailMarks() {
+    for (const name of document.querySelectorAll('[data-tpp-unread-name]')) {
+      delete name.dataset.tppUnreadName;
+    }
+    for (const dot of document.querySelectorAll('[data-tpp-ui="rail-dot"]')) {
+      dot.remove();
     }
   }
 
   /**
-   * Draws the dot that says a channel has news, immediately before its name.
+   * Draws the dot that says a channel has news, inside the name's own line.
    *
-   * It is a real element rather than a pseudo-element on Teams' own label: a
-   * `::before` there is the label's own slot, and Teams' markup is free to use
-   * it or hide it. Inserted before the name, it lands to the left of the text
-   * whatever the label is built from, and it can be removed cleanly.
+   * It goes in as the name's first child rather than as a sibling of it: a
+   * sibling is another flex item in Teams' row, so it was laid out beside the
+   * label's box instead of in its text, pushing the name along and onto a line
+   * of its own at narrow widths. An inline child sits in the same line box as
+   * the name, wraps with it, adds no line of its own and comes back out cleanly.
    */
   function paintRailDot(name, unread) {
-    const previous = name.previousElementSibling;
-    const dot = previous && previous.dataset && previous.dataset.tppUi === 'rail-dot' ? previous : null;
+    const child = name.firstElementChild;
+    const dot = child && child.dataset && child.dataset.tppUi === 'rail-dot' ? child : null;
     if (!unread) {
       if (dot) dot.remove();
       return;
@@ -865,7 +1228,136 @@
     mark.dataset.tppUi = 'rail-dot';
     mark.className = 'tpp-rail-dot';
     mark.setAttribute('aria-hidden', 'true');
-    name.before(mark);
+    name.prepend(mark);
+  }
+
+  /**
+   * Takes a channel's dot down once the posts it stood for have been read.
+   *
+   * The posts are the answer, not Teams' cue: with the compact view a post
+   * stays New until the user reads it by hand, so a channel with none left is
+   * one they have cleared — and the dot must go then, on its own, without the
+   * channel having to be clicked a second time. Teams' cue is only asked as a
+   * courtesy, in case it is still painting the channel that was just opened
+   * (see scheduleRailSettle); it can never keep the dot up.
+   */
+  function settleRailUnread() {
+    // Another Teams tab in front, or no channel at all: nothing here decides a
+    // dot, and a channel's posts are not on screen to be judged.
+    if (!postsTabSelected()) return;
+    // No dot in this release: nothing is latched, so there is nothing to settle.
+    if (!features || !features.railDot) return;
+    const key = openRailKeys().find((candidate) => railUnread[candidate]);
+    if (!key) return;
+    // Teams is still cueing the row: it may be drawing the channel that was
+    // opened a moment ago. Look again once the rail has caught up — and then
+    // let the posts decide, cued or not.
+    if (railCued.get(key)) {
+      scheduleRailSettle(key, 2);
+      return;
+    }
+    releaseIfAllRead(key, 0);
+  }
+
+  /**
+   * Releases a channel's dot when every post read from it has been read.
+   *
+   * Only rows read from this channel can decide it: another channel's posts,
+   * or none at all, are not evidence that this one has been read. `tries` is
+   * how many more looks an empty list is worth — a channel with no posts looks
+   * exactly like one whose list is still loading, and the first is a dot that
+   * could never be cleared by opening a card.
+   */
+  function releaseIfAllRead(key, tries) {
+    const rows = rowsKeys.includes(key) ? rowsById : null;
+    if (!rows) return;
+    if (!rows.size) {
+      if (tries > 0) scheduleRailSettle(key, tries - 1);
+      return;
+    }
+    for (const entry of rows.values()) {
+      if (entry.row.dataset.tppNew === '1') {
+        // There is news here again: the rail is free to say so, even if this
+        // channel's last dot was settled while Teams kept the row cued.
+        railSettled.delete(key);
+        return;
+      }
+    }
+    releaseRailUnread(key);
+  }
+
+  /**
+   * The names the rail gives the channel now on screen.
+   *
+   * The header title is the direct answer, but Teams has moved that element
+   * between builds, and where it is missing no dot could ever be cleared. The
+   * row Teams draws as selected names the same channel, so both are offered and
+   * the latch is looked up under either.
+   */
+  function openRailKeys() {
+    const keys = [];
+    const title = channelTitle();
+    if (title) keys.push(title);
+    const selector = (S.channelItem || []).join(',');
+    if (!selector) return keys;
+    try {
+      for (const item of document.querySelectorAll(selector)) {
+        if (item.querySelector(selector)) continue;
+        if (!isCurrentRailRow(item)) continue;
+        const name = railNameOf(item);
+        const key = name && collapse(name.textContent || '');
+        if (key && !keys.includes(key)) keys.push(key);
+      }
+    } catch (_) {
+      // No rail on screen: the title, where there is one, is all there is.
+    }
+    return keys;
+  }
+
+  /** Takes a channel's dot down for good: the latch, the mark and the paint. */
+  function releaseRailUnread(key) {
+    clearTimeout(railSettleTimer);
+    railSettleTimer = 0;
+    if (!railUnread[key]) return;
+    delete railUnread[key];
+    // The posts answered this cue. Remember that for as long as Teams draws the
+    // row the same way, so the cue cannot latch the dot straight back on.
+    railSettled.add(key);
+    saveRailSoon();
+    // Redrawn now rather than on the pass a second away, so the dot leaves with
+    // the card that cleared it.
+    channelRailAt = 0;
+    paintChannelRail();
+  }
+
+  /**
+   * Looks at the channel's dot again a moment later.
+   *
+   * Two answers are not final the first time they are asked: Teams' bold may
+   * still be on the row from before the channel opened, and a list that has not
+   * rendered looks like a channel with no posts. The rail is repainted first, so
+   * the second look is made on what Teams shows now; a cue that is still there
+   * buys one more wait and no more, and then the posts decide — a cue Teams
+   * left behind must never be what keeps the dot up.
+   */
+  function scheduleRailSettle(key, tries = 1) {
+    clearTimeout(railSettleTimer);
+    railSettleTimer = setTimeout(() => {
+      railSettleTimer = 0;
+      if (!ready || tries <= 0) return;
+      // Another channel on screen: its own scan decides its own dot.
+      if (!postsTabSelected() || !openRailKeys().includes(key)) return;
+      channelRailAt = 0;
+      paintChannelRail();
+      // One more wait while Teams is still cueing the row; after that the posts
+      // decide, because a cue Teams left behind is what kept dots up over
+      // channels the user had already read.
+      if (railCued.get(key) && tries > 1) {
+        scheduleRailSettle(key, tries - 1);
+        return;
+      }
+      releaseIfAllRead(key, tries - 1);
+    }, 1200);
   }
 
   /** The element that carries a channel row's name, remembered per row. */
@@ -881,7 +1373,11 @@
       let looked = 0;
       for (const el of item.querySelectorAll('span, div, p, a')) {
         if (looked++ > 14) break;
-        if (el.children.length || !hasLetters(el.textContent)) continue;
+        // Our dot is a child of the name, and it is all a name may hold.
+        const kids = Array.from(el.children).filter(
+          (child) => child.dataset.tppUi !== 'rail-dot'
+        );
+        if (kids.length || !hasLetters(el.textContent)) continue;
         name = el;
         break;
       }
@@ -921,6 +1417,26 @@
   }
 
   /**
+   * Whether Teams draws this rail row as the one the user is in.
+   *
+   * The selected row is semibold, and a weight is exactly what the rail reads as
+   * unread, so the two have to be told apart. Teams marks the row with
+   * aria-selected, aria-current or a class — never with the badge markup below —
+   * so this answers a different question from hasUnreadMark.
+   */
+  function isCurrentRailRow(item) {
+    try {
+      if (item.getAttribute('aria-selected') === 'true') return true;
+      if (item.getAttribute('aria-current')) return true;
+      if (/(?:^|[\s_-])(?:selected|current|active)(?:[\s_-]|$)/i.test(String(item.className || '')))
+        return true;
+      return Boolean(item.querySelector('[aria-selected="true"], [aria-current]'));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
    * Whether a row carries Teams' own unread marker — a dot, a count or a badge,
    * or an aria label that says so. Some builds cue the rail with one of these
    * and no weight change at all, which is why the weight alone cannot be trusted.
@@ -933,6 +1449,10 @@
         '[data-tid*="unread" i], [data-tid*="new-message" i], [aria-label*="unread" i]'
       )) {
         if (el.closest('[data-tpp-ui]')) continue;
+        // A row can keep its context menu in its own markup, and "Mark as
+        // unread" is a menu item, not a badge: read as a cue it marked the
+        // channel for good, since the menu never goes away.
+        if (el.closest('[role="menu"], [role="menuitem"]')) continue;
         return true;
       }
     } catch (_) {
@@ -1016,6 +1536,9 @@
       paintLastRead(row, endsLastRead(row));
     }
     syncLastReadBands();
+    // A line that has just appeared in a gap goes there alone: the day's line
+    // under the same post would sit on top of it.
+    refreshDaySeparators();
   }
 
   /**
@@ -1040,68 +1563,81 @@
     }
   }
 
-  /**
-   * Puts the "Last read" line in the middle of the gap under the post it closes,
-   * measuring from the visible edges of the two posts rather than from the boxes
-   * around them, whose padding would pull the line off centre.
-   */
+  /** Places the "Last read" lines, and the day's lines, on the page. */
   function placeLastRead() {
     for (const seam of document.querySelectorAll('.tpp-last-read')) {
-      const row = seam.closest('.tpp-post');
-      if (!row) continue;
-
-      // The box the user sees: the card while the post is folded, the post itself
-      // once it is open.
-      const card = row.querySelector(':scope > [data-tpp-ui="preview"]');
-      const open = row.classList.contains('tpp-unfold');
-      const shown = card && !open ? card : row;
-      const rowRect = row.getBoundingClientRect();
-      const box = shown.getBoundingClientRect();
-      if (!box.height) continue;
-
-      // The band under the post belongs to the line, not to the post: measuring
-      // an open row to its padded bottom would put the gap above the line and
-      // drop the line onto the post below.
-      const banded = row.classList.contains('tpp-last-read-row');
-      const band = open && banded ? parseFloat(getComputedStyle(row).paddingBottom) || 0 : 0;
-      const bottom = box.bottom - band;
-
-      let next = row.nextElementSibling;
-      let nextBox = null;
-      while (next) {
-        const post = next.classList.contains('tpp-post')
-          ? next
-          : next.querySelector('.tpp-post');
-        if (post) {
-          // The same box the user sees: a folded post is its card. Its row keeps
-          // padding above the card, and measuring that would pull the line up.
-          const nextCard = post.querySelector('[data-tpp-ui="preview"]');
-          const nextShown =
-            nextCard && !post.classList.contains('tpp-unfold') ? nextCard : post;
-          nextBox = nextShown.getBoundingClientRect();
-          break;
-        }
-        next = next.nextElementSibling;
-      }
-
-      // The middle of the space the user sees: under the last-read post's card
-      // and over the next post's card.
-      const target = nextBox ? (bottom + nextBox.top) / 2 : bottom + 18;
-      const floor = bottom - rowRect.top + 2;
-
-      // The line is measured where it is drawn and moved by the difference, so
-      // any offset between its box and the line inside it (a copied divider with
-      // margins, a clipped one) is taken out instead of assumed away.
-      const drawn = seam.getBoundingClientRect();
-      const top = drawn.height
-        ? (parseFloat(seam.style.top) || 0) + (target - (drawn.top + drawn.height / 2))
-        : bottom - rowRect.top + Math.max((nextBox ? nextBox.top - bottom : 16) / 2, 2) - seam.offsetHeight / 2;
-
-      // Only when it moves: writing the same value on every scan is a mutation,
-      // and a mutation on our own node is what a scan loop feeds on.
-      const nextTop = `${Math.round(Math.max(top, floor))}px`;
-      if (seam.style.top !== nextTop) seam.style.top = nextTop;
+      placeSeam(seam, 'tpp-last-read-row');
     }
+  }
+
+  function placeDaySeparators() {
+    for (const seam of document.querySelectorAll('.tpp-day-sep')) {
+      placeSeam(seam, 'tpp-day-row');
+    }
+  }
+
+  /**
+   * Puts a line in the middle of the gap under the post it closes, measuring
+   * from the visible edges of the two posts rather than from the boxes around
+   * them, whose padding would pull the line off centre.
+   *
+   * `band` is the row class that gives the line a band of its own: an open row
+   * measured to its padded bottom would put the gap above the line and drop the
+   * line onto the post below.
+   */
+  function placeSeam(seam, band) {
+    const row = seam.closest('.tpp-post');
+    if (!row) return;
+
+    // The box the user sees: the card while the post is folded, the post itself
+    // once it is open.
+    const card = row.querySelector(':scope > [data-tpp-ui="preview"]');
+    const open = row.classList.contains('tpp-unfold');
+    const shown = card && !open ? card : row;
+    const rowRect = row.getBoundingClientRect();
+    const box = shown.getBoundingClientRect();
+    if (!box.height) return;
+
+    // The band under the post belongs to the line, not to the post.
+    const banded = row.classList.contains(band);
+    const padding = open && banded ? parseFloat(getComputedStyle(row).paddingBottom) || 0 : 0;
+    const bottom = box.bottom - padding;
+
+    let next = row.nextElementSibling;
+    let nextBox = null;
+    while (next) {
+      const post = next.classList.contains('tpp-post')
+        ? next
+        : next.querySelector('.tpp-post');
+      if (post) {
+        // The same box the user sees: a folded post is its card. Its row keeps
+        // padding above the card, and measuring that would pull the line up.
+        const nextCard = post.querySelector('[data-tpp-ui="preview"]');
+        const nextShown =
+          nextCard && !post.classList.contains('tpp-unfold') ? nextCard : post;
+        nextBox = nextShown.getBoundingClientRect();
+        break;
+      }
+      next = next.nextElementSibling;
+    }
+
+    // The middle of the space the user sees: under this post's card and over
+    // the next post's card.
+    const target = nextBox ? (bottom + nextBox.top) / 2 : bottom + 18;
+    const floor = bottom - rowRect.top + 2;
+
+    // The line is measured where it is drawn and moved by the difference, so
+    // any offset between its box and the line inside it (a copied divider with
+    // margins, a clipped one) is taken out instead of assumed away.
+    const drawn = seam.getBoundingClientRect();
+    const top = drawn.height
+      ? (parseFloat(seam.style.top) || 0) + (target - (drawn.top + drawn.height / 2))
+      : bottom - rowRect.top + Math.max((nextBox ? nextBox.top - bottom : 16) / 2, 2) - seam.offsetHeight / 2;
+
+    // Only when it moves: writing the same value on every scan is a mutation,
+    // and a mutation on our own node is what a scan loop feeds on.
+    const nextTop = `${Math.round(Math.max(top, floor))}px`;
+    if (seam.style.top !== nextTop) seam.style.top = nextTop;
   }
 
   /**
@@ -1179,6 +1715,120 @@
       '[data-tpp-ui="last-read"]'
     )) {
       if (other !== seam) other.remove();
+    }
+  }
+
+  /**
+   * The day a post belongs to, as the page prints it.
+   *
+   * Teams prints a time on every post but puts no day over them, so the label is
+   * counted from the post's own stamp: the page's clock decides whether that
+   * day is Today, Yesterday or a date, and the reader's locale prints it. The
+   * year only appears when it is not this one.
+   */
+  function dayLabelOf(ts) {
+    const date = new Date(ts);
+    if (!Number.isFinite(date.getTime())) return '';
+    const midnight = (value) =>
+      new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+    const today = new Date();
+    const days = Math.round((midnight(today) - midnight(date)) / 86400000);
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    const options = { weekday: 'long', day: 'numeric', month: 'long' };
+    if (date.getFullYear() !== today.getFullYear()) options.year = 'numeric';
+    try {
+      return date.toLocaleDateString(undefined, options);
+    } catch (_) {
+      return date.toDateString();
+    }
+  }
+
+  /**
+   * Draws the line that separates one day's posts from the next.
+   *
+   * It ends the last post of a day, in the same place and the same shape as
+   * Teams' own "Last read" line, and carries the date instead of the word. A
+   * gap that already carries that line keeps only it: two lines in one gap would
+   * sit on top of each other, and the read boundary is the more useful of the
+   * two to see.
+   */
+  function paintDaySeparator(row, ts) {
+    let sep = row.querySelector(':scope > [data-tpp-ui="day-sep"]');
+    // Inbox Zero replaces the read markers with its own tabs, and the last-read
+    // seam is the boundary there.
+    const wanted =
+      Boolean(features) &&
+      features.compactPosts &&
+      !features.inboxZero &&
+      ts > 0 &&
+      !endsLastRead(row);
+    if (!wanted) {
+      sep?.remove();
+      row.classList.remove('tpp-day-row');
+      return;
+    }
+
+    row.classList.add('tpp-day-row');
+    if (!sep) {
+      sep = document.createElement('div');
+      sep.className = 'tpp-day-sep';
+      sep.dataset.tppUi = 'day-sep';
+      sep.innerHTML =
+        '<span class="tpp-day-line"></span>' +
+        '<span class="tpp-day-label"></span>' +
+        '<span class="tpp-day-line"></span>';
+      // After the post, not before it: the line ends the day it belongs to.
+      row.append(sep);
+    }
+    const label = dayLabelOf(ts);
+    const slot = sep.querySelector('.tpp-day-label');
+    if (slot && slot.textContent !== label) slot.textContent = label;
+  }
+
+  /**
+   * Decides which posts end a day, and draws the line under them.
+   *
+   * The rows are walked in the order Teams lists them: a post ends its day when
+   * the next post with a stamp is from another day. A post whose stamp cannot be
+   * read is passed over rather than guessed at, and the day after it is still
+   * compared with the day before it, so one unreadable post cannot split a day
+   * in two or join two together.
+   */
+  function refreshDaySeparators() {
+    if (!features || !features.compactPosts) {
+      for (const sep of document.querySelectorAll('[data-tpp-ui="day-sep"]')) sep.remove();
+      for (const row of document.querySelectorAll('.tpp-day-row')) {
+        row.classList.remove('tpp-day-row');
+      }
+      return;
+    }
+
+    const dated = [];
+    for (const row of document.querySelectorAll('.tpp-post')) {
+      // The day a post sits in is the day of its newest activity: a reply lifts
+      // a post into today's run, and the date it was written would cut the run.
+      const ts = activityStampOf(row);
+      const date = ts > 0 ? new Date(ts) : null;
+      dated.push({
+        row,
+        ts,
+        day: date ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}` : ''
+      });
+    }
+
+    // Filled from the end so the next dated post is known in one pass.
+    const nextDay = new Array(dated.length).fill('');
+    let ahead = '';
+    for (let i = dated.length - 1; i >= 0; i -= 1) {
+      nextDay[i] = ahead;
+      if (dated[i].day) ahead = dated[i].day;
+    }
+
+    for (let i = 0; i < dated.length; i += 1) {
+      const entry = dated[i];
+      const endsDay = Boolean(entry.day) && Boolean(nextDay[i]) && nextDay[i] !== entry.day;
+      paintDaySeparator(entry.row, endsDay ? entry.ts : 0);
     }
   }
 
@@ -1719,6 +2369,42 @@
     }
   }
 
+  /** Keeps only well-formed channel names, newest last, under the cap. */
+  function normalizeRailUnread(stored) {
+    if (!stored || typeof stored !== 'object') return {};
+    // A latch is either the old plain `1` or `{ r, t }`: the reason it was
+    // written and when, so a dot that stays can be asked why (teamsPlusPlusRail).
+    const entries = Object.entries(stored).filter(
+      ([name, value]) =>
+        typeof name === 'string' &&
+        name.length > 0 &&
+        (value === 1 || (value && typeof value === 'object'))
+    );
+    return Object.fromEntries(entries.slice(-RAIL_UNREAD_LIMIT));
+  }
+
+  function saveRailSoon() {
+    clearTimeout(railSaveTimer);
+    railSaveTimer = setTimeout(() => {
+      railSaveTimer = 0;
+      persistRailUnread();
+    }, 300);
+  }
+
+  function persistRailUnread() {
+    const entries = Object.entries(railUnread);
+    if (entries.length > RAIL_UNREAD_LIMIT) {
+      railUnread = Object.fromEntries(entries.slice(-RAIL_UNREAD_LIMIT));
+    }
+    try {
+      chrome.storage.local.set({ [RAIL_UNREAD_KEY]: railUnread }, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (_) {
+      // The extension was reloaded while this page stayed open.
+    }
+  }
+
   /**
    * Has a read post moved on since it was filed?
    *
@@ -1984,9 +2670,69 @@
     }
 
     rowsById = next;
+    // Which channel these rows came from, under every name the rail gives it:
+    // settleRailUnread refuses to judge one channel by another's posts.
+    rowsKeys = openRailKeys();
+    // The posts are now read: the rail's dot for this channel is decided with
+    // them rather than from Teams' bold, which went as the channel opened.
+    settleRailUnread();
     syncLastReadBands();
     placeLastRead();
+    refreshDaySeparators();
+    placeDaySeparators();
     applyViewFiltering();
+  }
+
+  /**
+   * The newest moment Teams prints on a post: the post itself, or a reply to it.
+   *
+   * A post answered today is lifted back up the channel and still prints the
+   * time it was written, so its own stamp files it under the day it was posted —
+   * and that line then cuts through today's run. The day lines follow the place
+   * a post has in the list, so they go by the newest thing in the row instead: a
+   * reply stamp Teams renders in it (a time element, a `timestamp-…` id, or the
+   * words of a "last replied" line) wins when it is newer than the post's own.
+   *
+   * Asking is not free — a row can hold a whole thread — so the answer is kept on
+   * the row until the post or its reply count changes, which is what a new reply
+   * does.
+   */
+  function activityStampOf(row) {
+    if (!row) return 0;
+    const own = stampOf(row);
+    const seen = `${own}|${replyCountOf(row)}`;
+    if (row.dataset.tppActOf === seen) return Number(row.dataset.tppActAt) || 0;
+
+    let latest = own || previewTimeOf(row);
+    const consider = (ts) => {
+      // A date in the future is a misread, not news: a weekday printed without a
+      // day can parse as the next one.
+      if (Number.isFinite(ts) && ts > latest && ts <= Date.now() + 86400000) {
+        latest = ts;
+      }
+    };
+    try {
+      for (const el of row.querySelectorAll('time[datetime]')) {
+        consider(Date.parse(el.getAttribute('datetime') || ''));
+      }
+      // Replies are stamped the way posts are: `timestamp-1793472227903`.
+      for (const el of row.querySelectorAll('[id^="timestamp-"]')) {
+        const suffix = /(\d{10,})$/.exec(el.id || '');
+        if (suffix) consider(Number(suffix[1]));
+      }
+      // A build that prints the newest reply as words rather than a time.
+      const footer = first(S.replyCount, row);
+      const words = /last\s+repl(?:y|ied)[^a-z0-9]*([^·•|]{4,40})/i.exec(
+        footer ? collapse(footer.textContent || '') : ''
+      );
+      if (words) consider(Date.parse(words[1]));
+    } catch (_) {
+      // Nothing readable in the row: the post's own stamp stands.
+    }
+
+    row.dataset.tppActOf = seen;
+    row.dataset.tppActAt = String(latest || 0);
+    return latest;
   }
 
   /** When Teams stamped a post, in ms, or 0 when it prints nothing readable. */
@@ -2191,10 +2937,19 @@
 
   /** Takes our own controls and marks off a row that is no longer a post. */
   function clearPostUi(row) {
-    row.classList.remove('tpp-post', 'tpp-unfold', 'tpp-previewed', 'tpp-ready', 'tpp-last-read-row');
+    row.classList.remove(
+      'tpp-post',
+      'tpp-unfold',
+      'tpp-previewed',
+      'tpp-ready',
+      'tpp-last-read-row',
+      'tpp-day-row'
+    );
     delete row.dataset.tppPainted;
     delete row.dataset.tppCardOf;
     delete row.dataset.tppTs;
+    delete row.dataset.tppActOf;
+    delete row.dataset.tppActAt;
     // A row we made focusable for a moment gives the attribute back.
     if (row.dataset.tppTabindex === '1') {
       row.removeAttribute('tabindex');
@@ -3295,9 +4050,10 @@
 
       listRect = list.getBoundingClientRect();
 
-      // The line sits in the gap between two posts, so it is re-measured with
-      // everything else that is placed against the list.
+      // The lines sit in the gaps between two posts, so they are re-measured
+      // with everything else that is placed against the list.
       placeLastRead();
+      placeDaySeparators();
 
       const empty = document.getElementById(EMPTY_ID);
       if (empty) anchor(empty, list, { top: 18, full: true, matchHeight: true });
@@ -3346,13 +4102,34 @@
     titleObserver?.disconnect();
     titleObserver = null;
     titleEl = el;
+    // The element itself was replaced, which is what a channel switch often
+    // does: the title is read here as well as in the observer, so a swap that
+    // never mutates the old node still folds the posts of the channel left.
+    noteChannelTitle();
     if (!el) return;
     titleObserver = new MutationObserver(() => {
       if (!ready) return;
+      noteChannelTitle();
       resetForChannelChange();
       scheduleScan(true);
     });
     titleObserver.observe(el, { childList: true, characterData: true, subtree: true });
+  }
+
+  /**
+   * Folds the open posts when the channel on screen is not the one last seen.
+   *
+   * The title is the channel's name in Teams' own header, and a switch changes
+   * it — by its text or by replacing the element. Only a different name counts:
+   * Teams repaints the title for a mention count too, and folding the post
+   * somebody is reading because a counter changed would be its own surprise.
+   */
+  function noteChannelTitle() {
+    // A mention count can ride along in the header's text; that is not a channel.
+    const name = (channelTitle() || '').replace(/\s*\(\d+\)$/, '');
+    if (!name || name === lastChannelTitle) return;
+    lastChannelTitle = name;
+    foldOpenPosts();
   }
 
   /**
@@ -3363,6 +4140,8 @@
   function resetForChannelChange() {
     lastList = null;
     listRect = null;
+    // The guard was taken for the posts of the channel being left.
+    cascadeGuard = null;
   }
 
   // -------------------------------------------------------------- persistence
@@ -3698,6 +4477,11 @@
     // The rail is read on every scan, wherever Teams is: a channel can have news
     // while a chat is open. paintChannelRail throttles itself to once a second.
     paintChannelRail();
+    // A channel Teams gives no list at all never rebuilds its rows, and its dot
+    // would then never be settled. The same decision is made here; it only uses
+    // rows read from this channel (rowsKeys), so a scan that has not reached the
+    // posts yet cannot clear the dot of the one before it.
+    settleRailUnread();
 
     // A scan answers the change that asked for it, so both timers are settled.
     clearTimeout(rescanTimer);
@@ -4318,10 +5102,18 @@
     readState = normalizeMap(items[UNREAD_KEY], READ_LIMIT);
     newState = normalizeMap(items[NEW_POSTS_KEY], NEW_POST_LIMIT);
     try {
-      const local = await chrome.storage.local.get(ACTIVITY_KEY);
+      const local = await chrome.storage.local.get([ACTIVITY_KEY, RAIL_UNREAD_KEY]);
       activityState = normalizeActivity(local && local[ACTIVITY_KEY]);
+      // The rail dot is off in this release, so no latch is read back, and the
+      // map an older build wrote is dropped: kept, it would dot the rail the
+      // moment the feature is switched on again, from news long since read.
+      railUnread = features.railDot ? normalizeRailUnread(local && local[RAIL_UNREAD_KEY]) : {};
+      if (!features.railDot && local && local[RAIL_UNREAD_KEY]) {
+        chrome.storage.local.remove(RAIL_UNREAD_KEY, () => void chrome.runtime.lastError);
+      }
     } catch (_) {
       activityState = {};
+      railUnread = {};
     }
 
     // Entries an older build inferred from Teams' "New" badge and "Last read"
@@ -4364,6 +5156,58 @@
     }
     view = normalizeView(items[VIEW_KEY]);
     ready = true;
+
+    // What the day lines are drawn from, asked the same way with
+    // `teamsPlusPlusDays()`: a post filed under the wrong day is a question
+    // about the stamps Teams printed on that row, and this prints them.
+    window.teamsPlusPlusDays = () =>
+      Array.from(document.querySelectorAll('.tpp-post')).map((row) => {
+        const own = stampOf(row);
+        const activity = activityStampOf(row);
+        return {
+          id: row.dataset.tppId || '',
+          post: own ? new Date(own).toISOString() : '',
+          activity: activity ? new Date(activity).toISOString() : '',
+          day: activity ? dayLabelOf(activity) : '',
+          replies: replyCountOf(row)
+        };
+      });
+
+    // What the rail's dots are drawn from, asked from the page's own console
+    // with `teamsPlusPlusRail()`: a dot that will not go away is a question
+    // about the row Teams drew, and this prints that row rather than guessing.
+    window.teamsPlusPlusRail = () => {
+      const selector = (S.channelItem || []).join(',');
+      const rows = [];
+      for (const item of document.querySelectorAll(selector)) {
+        if (item.querySelector(selector)) continue;
+        const name = railNameOf(item);
+        if (!name) continue;
+        rows.push({
+          name: collapse(name.textContent || ''),
+          selected: isCurrentRailRow(item),
+          weight: getComputedStyle(name).fontWeight,
+          badge: hasUnreadMark(item),
+          dot: name.dataset.tppUnreadName === '1',
+          aria: item.getAttribute('aria-label') || '',
+          role: item.getAttribute('role') || ''
+        });
+      }
+      return {
+        build: BUILD,
+        open: openRailKeys(),
+        rowsKeys,
+        latched: { ...railUnread },
+        cued: Object.fromEntries(railCued),
+        settled: Array.from(railSettled),
+        pending: Object.fromEntries(railPending),
+        posts: rowsById.size,
+        newPosts: Array.from(rowsById.values()).filter(
+          (entry) => entry.row.dataset.tppNew === '1'
+        ).length,
+        rows
+      };
+    };
     apply();
   }
 
@@ -4503,6 +5347,13 @@
     });
 
     document.addEventListener('click', onPostClick, true);
+    // The menu's item is read before Teams can close the menu over it.
+    document.addEventListener('pointerdown', onUnreadMenuPress, true);
+    document.addEventListener('click', onUnreadMenuPress, true);
+    // Which post the message menu was opened from: see lastHoveredRow.
+    document.addEventListener('pointerover', onPostHover, true);
+    // When the last press was: see lastPointerAt.
+    document.addEventListener('pointerdown', onAnyPointerDown, true);
     document.addEventListener('keydown', onPostKeyDown, true);
     window.addEventListener('scroll', onAnyScroll, { passive: true, capture: true });
     window.addEventListener('resize', reposition);

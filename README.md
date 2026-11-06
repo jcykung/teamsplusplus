@@ -55,37 +55,106 @@ the moment Teams switches.
 
 The card carries Teams' own **New** badge beside the time, so a folded post says
 at a glance that it has arrived, and it wears a bright purple border instead of
-the usual hairline until it has been read. A channel with unread posts carries
-the same purple in the left rail: its name stays bold and a purple dot sits to
-the left of it, so the channel and its new posts read as one thing. Teams' **Last read** divider closes the last
-post you read, so the card copies Teams' own divider into the gap underneath that
-post and centres it between the two cards — same line, same wording, same
-spacing. Where Teams' divider is already on screen, the copy stands down rather
-than double it.
+the usual hairline until it has been read. When Teams clears its own badge — the
+post has been read somewhere Teams counts — the card says **Unread** in its place
+and keeps the border, so a post that stopped being new without being read here
+still waits for a click. Teams' **Last read** divider closes
+the last post you read, so the card copies Teams' own divider into the gap
+underneath that post and centres it between the two cards — same line, same
+wording, same spacing. Where Teams' divider is already on screen, the copy
+stands down rather than double it.
+
+The posts are also split by day. Under the last post of each day runs a line in
+the same shape as Teams' own divider, in a lighter purple, with the date in the
+middle of it: **Today**, **Yesterday**, then the day's name. It is drawn from
+the stamps on the posts themselves, so it holds whether or not Teams prints a
+date on them.
+
+A post answered today sits in today's run. The line follows the newest activity
+Teams prints on the row — the post's own time, or a newer reply's — so a post
+lifted back up by a reply is filed under the day it came back rather than the
+day it was written.
 
 Opening a card marks a post read. Closing it again does not, so a post closed
-without being read stays New. Until a card is opened it keeps its **New** badge
-and purple border, even after Teams clears its own badge when the channel is
-opened — Teams' idea of read is not the one this view follows. Opening a post
+without being read stays marked. Until a card is opened it keeps its purple
+border and a badge, even after Teams clears its own badge when the channel is
+opened — the word follows Teams (**New** while Teams says new, **Unread** after
+that) but the mark itself does not, because Teams' idea of read is not the one
+this view follows. Opening a post
 that has moved on since you last read it brings the markers back, so a reply, a
 reaction, a new attachment or an edit puts the card back in view.
 
 ### Manually mark as read
 
-On by default. A post Teams marks **New** keeps its badge and purple border until
-you open its card — Teams clearing its badge when the channel opens does not
-count as reading it — so a channel says at a glance what has arrived. Turn the
-switch off and the cards follow Teams instead: the badge and purple border show
-while Teams marks the post new and clear when Teams marks it read.
+On by default. A post Teams marks **New** keeps its purple border until you open
+its card — Teams clearing its badge when the channel opens does not count as
+reading it — so a channel says at a glance what has arrived. The badge itself
+follows Teams' badge: **New** while Teams still shows one, **Unread** once Teams
+has cleared it and only our mark is left — except for a post you marked unread
+yourself, which always says **Unread**. Turn the switch off and the cards follow
+Teams instead: the badge and purple border show while Teams marks the post new
+and clear when Teams marks it read.
 
-Marking a post unread from Teams' own menu brings the badge and border back the
-same way, even on a post already marked read, and it stays until you open the
-card again — opening it to reach that menu is not what clears it, and closing it
-again does not either.
+Changing channel folds whatever was open. A channel is always entered as a list of
+cards, the way it looked before any of them was opened, so a post you were
+reading in one channel does not come back open the next time you visit it.
+
+Marking a post unread brings the badge and border back even on a post already
+marked read, and the card says **Unread** straight away — that mark is your
+decision, not an arrival, so it does not wait for Teams' own badge to clear.
+Opening the card again is the only thing that clears it — opening it to reach the
+menu is not what does, and closing it again is not either. Teams also marks
+every message newer than that one unread when it does this; this view does not
+follow it there, so those posts stay read unless they have moved on since.
 
 The Compact posts switch lives in the popup, and its setting is stored in
 `chrome.storage.sync`, so it follows the user to every Chrome profile signed in
 with the same account.
+
+## Privacy and security
+
+Teams++ is built so that there is nothing to leak:
+
+- **Nothing leaves the browser.** The extension makes no network requests of its
+  own — no analytics, no telemetry, no error reporting, no fonts, no remote code.
+  The only URLs it opens are the Teams site itself and the optional Ko-fi page.
+- **Page content is read locally.** Post text, author names and timestamps are
+  read from the page that is already open, used to draw the cards, and kept in
+  the browser. None of it is sent anywhere, logged or shared.
+- **Storage is settings and marks, not content.** `chrome.storage.sync` holds the
+  feature switches, the view, and post ids with a timestamp, a fingerprint and a
+  read/unread mark — no message text, no author names, no attachments. Local
+  storage holds only fingerprints derived from the page.
+- **Access is optional and revocable.** No Teams host access is granted at
+  install. The content script is registered with `chrome.scripting` only after the
+  user clicks **Enable on Microsoft Teams**, and it is unregistered again if the
+  user revokes access in Chrome.
+- **Least privilege.** The manifest asks for `storage` and `scripting` and the
+  three Teams web origins as *optional* host permissions. There is no `tabs`,
+  `cookies`, `identity` or `<all_urls>` request, and no statically injected
+  content script.
+- **No remote code.** All JavaScript ships in the package; the extension-page CSP
+  is `script-src 'self'; object-src 'self'`.
+
+The full policy is in [PRIVACY.md](PRIVACY.md).
+
+Teams++ is an independent project. It is not affiliated with, endorsed by, or
+sponsored by Microsoft, and Microsoft Teams is a trademark of Microsoft
+Corporation.
+
+## Publishing to the Chrome Web Store
+
+The listing copy, the answers to every field in the Chrome Web Store item form
+(single purpose, permission justifications, remote-code statement, data-usage
+disclosures) and a pre-submission checklist live in
+[STORE-LISTING.md](STORE-LISTING.md).
+
+Build the upload zip from the repository root, excluding development files:
+
+```bash
+zip -r teamsplusplus.zip . \
+  -x '.git/*' '.freebuff/*' '*.md' '.gitattributes' '.gitignore' 'icons/teamsplusplus*'
+```
 
 ## Layout
 
@@ -97,6 +166,8 @@ background.js            Owns the optional permission. Registers the content scr
                          welcome screen on install and the changelog on update
 onboarding.html          Welcome screen shown on first install
 onboarding.js            Requests Teams access, opens Teams, the changelog and Ko-fi
+PRIVACY.md               Privacy policy, ready to publish
+STORE-LISTING.md         Chrome Web Store copy and form answers
 changelog.html           Timeline of what changed in each version
 changelog.js             Links the changelog back to the welcome screen
 src/shared/features.js   Feature registry + sync-storage keys and helpers

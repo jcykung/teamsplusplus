@@ -16,10 +16,13 @@
  *   teamsPlusPlus.view      "inbox" (read posts hidden) or "archives"
  *                           (only read posts shown)
  *   teamsPlusPlus.newPosts  post id -> { n: 1 } while the compact card is still
- *                           new, or { f } with the fingerprint captured when it
- *                           was opened. While the "Manually mark as read"
- *                           switch is on, the only thing that marks a post read
- *                           in the compact view is opening its card.
+ *                           new (with `u: 1` when the user marked it unread by
+ *                           hand, which the card always calls Unread), or { f }
+ *                           with the fingerprint captured when it was read and
+ *                           `t`, when that read happened. While the "Manually
+ *                           mark as read" switch is on, the only thing that
+ *                           marks a post read in the compact view is opening
+ *                           its card.
  */
 (function (root) {
   'use strict';
@@ -57,7 +60,7 @@
       id: 'manualRead',
       attr: 'data-tpp-manual-read',
       label: 'Manually mark as read',
-      hint: 'A post keeps Teams\' New badge and purple border until you open its card. Turn it off to follow Teams instead, where opening the channel marks posts read.',
+      hint: "A post keeps its purple border until you open its card: the badge says New while Teams still marks it new, then Unread once Teams clears it. Marking a post unread brings it back as Unread straight away, and only for that post. Turn it off to follow Teams instead.",
       default: true
     },
     {
@@ -67,6 +70,19 @@
       hint: 'Throws one round of confetti when the Inbox Zero sign appears. Turn it off for a quiet Inbox.',
       default: false,
       // Part of Inbox Zero, and off with it for this release.
+      disabled: true
+    },
+    {
+      id: 'railDot',
+      attr: 'data-tpp-rail-dot',
+      label: 'Channel dot',
+      hint: 'Marks a channel with unread posts in the left rail: its name stays bold and a purple dot sits in its line, and the dot goes once the posts it stood for have been read.',
+      default: false,
+      // Not in this release: the cue Teams gives a channel proved too
+      // unreliable to ship, and a dot left standing over a channel that has
+      // been read is worse than no dot at all. Switching this on brings the
+      // whole thing back; until then the switch is hidden and normalize() pins
+      // it off, so the rail is not even read.
       disabled: true
     }
   ];

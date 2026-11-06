@@ -42,9 +42,13 @@ Hovering fills the card with Teams purple the way a filled button reads, and
 clicking it opens the post to its full height, handed straight back to Teams'
 own layout, replies and all. The same click makes the post the message Teams'
 own keyboard shortcuts act on, so they work straight away rather than after a
-second click; clicking the open post folds it back, and **Escape** does too. A
-channel that showed two posts now shows a dozen, which is the usual complaint
-about Teams' post list.
+second click; clicking the open post folds it back, and **Escape** does too.
+Only one post is open at a time — opening another closes the one before it, and
+the post that opens is scrolled up to the top of the list so it reads from its
+first line. Selecting a post's text — dragging over it, or double-clicking a
+word — leaves the post open so the words can be copied. A channel that showed
+two posts now shows a dozen, which is the usual complaint about Teams' post
+list.
 
 Light and dark are both the card's own: white with dark type in light mode, a
 soft charcoal with near-white type in dark. The theme is read from the page — a

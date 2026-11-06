@@ -86,6 +86,17 @@
   const REOPEN_GRACE_MS = 1200;
   /** How long after a press a Teams badge still counts as Teams' answer to it. */
   const BADGE_AFTER_PRESS_MS = 4000;
+  /**
+   * How long a click on an open post is held before it folds it, in ms.
+   *
+   * Highlighting text in an open post ends in a click on the post — the same
+   * event a click to fold it sends — and a double-click's first click arrives
+   * before the second that would select the word. Holding the fold for a moment
+   * is what tells the two apart: a highlight or a second press cancels it, and
+   * a plain click folds a beat later. Unfolding is not held: that is the click
+   * the view exists for.
+   */
+  const FOLD_AFTER_CLICK_MS = 220;
 
   const VIEW_INBOX = 'inbox';
   const VIEW_ARCHIVES = 'archives';
@@ -118,7 +129,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-04.159';
+  const BUILD = '2026-11-05.163';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -254,6 +265,9 @@
   let lastPointerAt = 0;
   /** When a manual unread was written, in ms: a press and its click are one. */
   let manualMarkAt = 0;
+  /** The fold a click on an open post asked for, and its timer: see onPostClick. */
+  let foldRow = null;
+  let foldTimer = 0;
   let rescanTimer = 0;
   let slowTimer = 0;
   /**
@@ -329,7 +343,56 @@
     // A post Teams has put in a pane of its own — a search result, a pinned
     // message, a dialog — is not ours to fold, whatever a scan left on it.
     if (inTeamsPane(row)) return;
+    // The second click of a double- or triple-click is a word or a paragraph
+    // being selected, not the post being folded.
+    if (event.detail > 1) return;
+    // Closing an open post is held for a beat: dragging over its text leaves a
+    // highlight and then sends a click, and that click is the user copying, not
+    // folding. See holdFold.
+    if (unfolded.has(row.dataset.tppId)) {
+      holdFold(row);
+      return;
+    }
     toggleUnfold(row);
+  }
+
+  /**
+   * Folds an open post unless the click turns out to have been a highlight.
+   *
+   * The fold waits FOLD_AFTER_CLICK_MS; anything that says the user was working
+   * in the post's text rather than on the card — a selection inside it, a
+   * pointer press, a drag — drops it, and a plain click folds as if nothing had
+   * been held.
+   */
+  function holdFold(row) {
+    cancelHoldFold();
+    foldRow = row;
+    foldTimer = window.setTimeout(() => {
+      const held = foldRow;
+      foldTimer = 0;
+      foldRow = null;
+      if (!held || !held.isConnected) return;
+      if (!unfolded.has(held.dataset.tppId)) return;
+      if (hasSelectionIn(held)) return;
+      toggleUnfold(held);
+    }, FOLD_AFTER_CLICK_MS);
+  }
+
+  /** Drops a fold the click asked for, keeping the post open. */
+  function cancelHoldFold() {
+    if (foldTimer) window.clearTimeout(foldTimer);
+    foldTimer = 0;
+    foldRow = null;
+  }
+
+  /** Whether some of the post's text is highlighted right now. */
+  function hasSelectionIn(row) {
+    if (!row) return false;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return false;
+    const anchor = selection.anchorNode;
+    const focus = selection.focusNode;
+    return !!(anchor && row.contains(anchor)) || !!(focus && row.contains(focus));
   }
 
   /**
@@ -369,8 +432,15 @@
   }
 
   /** Remembers when the pointer was last pressed: see lastPointerAt. */
-  function onAnyPointerDown() {
+  function onAnyPointerDown(event) {
     lastPointerAt = Date.now();
+    // A press in the post whose fold is held means the user is working in it —
+    // the second half of a double-click, or a drag over its text — so the fold
+    // goes. A press anywhere else is them moving on: the fold still stands.
+    if (!foldTimer || !foldRow) return;
+    const target = event.target;
+    if (!target || target.nodeType !== 1) return;
+    if (target === foldRow || foldRow.contains(target)) cancelHoldFold();
   }
 
   /** Remembers the post the pointer is over: its toolbar opens Teams' menu. */
@@ -381,13 +451,21 @@
     if (row) lastHoveredRow = row;
   }
 
-  /** Folds one post, or unfolds it again if it is already open. */
+  /**
+   * Folds one post, or unfolds it again if it is already open.
+   *
+   * One post is open at a time: opening another one closes the post being read,
+   * so moving to the next post in a channel never leaves a trail of open ones
+   * behind it.
+   */
   function toggleUnfold(row) {
     const id = row && row.dataset.tppId;
     if (!id) return;
     const open = !unfolded.has(id);
-    if (open) unfolded.add(id);
-    else unfolded.delete(id);
+    if (open) {
+      closeOtherPosts(row);
+      unfolded.add(id);
+    } else unfolded.delete(id);
     row.classList.toggle('tpp-unfold', open);
     // Opening the card is what marks a post read in this view. Closing it again
     // is not: a post closed without being read stays New, and a post marked
@@ -406,6 +484,72 @@
     if (open) focusPostMessage(row);
     // The post changed height, so anything placed against it is re-measured.
     reposition();
+    // The post is read from its first line, which is at the top of the list
+    // rather than wherever its card sat. The scroll waits for the frame after
+    // the click: the row has just grown and the post before it has closed.
+    if (open) {
+      requestAnimationFrame(() => {
+        const at = scrollPostToTop(row);
+        if (at === null) return;
+        window.setTimeout(() => {
+          // The click is handed on to Teams, which brings the message into view
+          // in its own time — after the frame above, sometimes. A post that has
+          // moved since is put back at the top; one that has not is left alone.
+          if (!row.isConnected || !unfolded.has(id)) return;
+          if (Math.abs(row.getBoundingClientRect().top - at) > 1) scrollPostToTop(row);
+        }, 150);
+      });
+    }
+  }
+
+  /**
+   * Brings an open post to the top of the list, so reading starts at its first
+   * line instead of wherever its card happened to be.
+   *
+   * Every box above the row that can scroll takes its turn, innermost first, and
+   * each is measured after the one inside it has moved — moving an outer box
+   * shifts the row and the inner box together, so the inner alignment survives.
+   * A box on `overflow: hidden` that Teams scrolls from script counts: it scrolls
+   * all the same when it is told to, and scrollBoxFor (which asks for an
+   * auto-overflow box, because the clamp must not pick a clipped one) would walk
+   * straight past it.
+   *
+   * The row's top is returned so the caller can tell a post that Teams has moved
+   * since. A post so near the end of a channel that a box cannot lift it that far
+   * ends up as high as that box allows: there is nothing below it to scroll into.
+   */
+  function scrollPostToTop(row) {
+    if (!row || !row.isConnected) return null;
+    const id = row.dataset.tppId;
+    if (!id || !unfolded.has(id)) return null;
+    for (let box = row.parentElement; box && box !== document.body; box = box.parentElement) {
+      if (box.scrollHeight <= box.clientHeight + 1) continue;
+      const overflow = getComputedStyle(box).overflowY;
+      if (overflow === 'visible' || overflow === 'clip') continue;
+      const delta = Math.round(row.getBoundingClientRect().top - box.getBoundingClientRect().top);
+      if (delta) box.scrollTop = Math.max(0, box.scrollTop + delta);
+    }
+    return row.getBoundingClientRect().top;
+  }
+
+  /**
+   * Closes every open post but this one.
+   *
+   * Nothing is written here: a post that was opened has already been marked
+   * read, and closing it again is not a change of mind. Ids go as well as
+   * classes — a row Teams has re-rendered is folded from the set — so a post
+   * that is off screen cannot come back open later.
+   */
+  function closeOtherPosts(keep) {
+    const keepId = keep && keep.dataset.tppId;
+    cancelHoldFold();
+    for (const id of Array.from(unfolded)) {
+      if (id !== keepId) unfolded.delete(id);
+    }
+    for (const row of document.querySelectorAll('.tpp-post.tpp-unfold')) {
+      if (row === keep) continue;
+      row.classList.remove('tpp-unfold');
+    }
   }
 
   /**
@@ -416,6 +560,7 @@
    * re-renders is folded from the set — so they are dropped first.
    */
   function foldOpenPosts() {
+    cancelHoldFold();
     unfolded.clear();
     lastOpenedRow = null;
     for (const row of document.querySelectorAll('.tpp-post.tpp-unfold')) {

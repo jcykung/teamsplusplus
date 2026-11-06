@@ -1,6 +1,6 @@
 # Chrome Web Store submission pack — Teams++
 
-Everything needed to submit v1.0.3 of Teams++: copy for the listing, answers for
+Everything needed to submit v1.0.4 of Teams++: copy for the listing, answers for
 every question in the item form, and the checks a reviewer is likely to make.
 
 The extension collects no data and makes no network requests, which makes the
@@ -10,7 +10,7 @@ privacy section simple to answer honestly: **no collection, no transmission.**
 
 ## 1. Before you submit
 
-- [ ] `manifest.json` version is the version you are uploading (`1.0.3`).
+- [ ] `manifest.json` version is the version you are uploading (`1.0.4`).
 - [ ] The zip contains `manifest.json` at its **root** (not inside a folder).
 - [ ] The zip contains no development files: `.git/`, `.freebuff/`, `*.md`,
       `icons/teamsplusplus*.png`.
@@ -261,9 +261,9 @@ avatars or message text in anything you would not publish; use a test channel.
 
 ## 10. Release checklist for this version
 
-- `manifest.json` → `1.0.3`
+- `manifest.json` → `1.0.4`
 - `background.js` → `CONTENT_VERSION` bumped so open Teams tabs pick up the new
   content script after an extension reload
-- `changelog.html` → v1.0.3 entry marked Current, v1.0.2 demoted
+- `changelog.html` → v1.0.4 entry marked Current, v1.0.3 demoted
 - `README.md` → read/unread rules and privacy sections current
 - `PRIVACY.md` → published and linked

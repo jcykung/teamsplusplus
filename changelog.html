@@ -304,7 +304,22 @@
           </div>
           <ul class="change-list">
             <li class="change-item">
-              <span class="badge-tag tag-fix">FIX</span><strong>A post you mark unread is the only one marked:</strong> Teams also marks the posts around the one you chose as unread, and those marks are the channel's, so they were still there after a reload — the cards came back as New in a block. The compact view now remembers how far the channel had got when you made the mark, and holds everything stamped at or before that moment read. Your post keeps its <strong>Unread</strong> badge and purple outline until you open it; the rest stay read, whatever Teams badges on them, and a post that arrives afterwards still says New.
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>One word for unread:</strong> the New badge is gone — a post that has arrived, or one answered since you last read it, simply wears an <strong>Unread</strong> badge and a purple outline until you open it. The Last read line and its copy are gone with it.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>Dates where the reading starts:</strong> in the default view the day's line sits above the first post of the day, so each run starts with its date; with new posts at the bottom it closes the day above it. Whichever edge you read from, the date holds there until the next day's line takes over. The held line is as wide as the posts and its date centred on them. Where the pane leaves an empty strip above the list it is drawn in that, so the posts never pass under it; where it does hold over the list, it stands on the colour of the cards behind it, so what scrolls beneath cannot be read through it.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>No more Ctrl+F nag:</strong> Teams' black "press Ctrl+F to find in this channel" nudge, which it drops over the list when you start scrolling, is hidden.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>Steadier scrolling:</strong> the list no longer changes height under the reader, so scrolling — especially with new posts at the bottom — stops jumping. The order of the list is read once and kept, instead of being re-guessed from posts that are mid-render.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>Posts arrive folded:</strong> a post Teams mounted was laid out at its full height and only turned into a card a moment later, so the list grew by a whole post and gave the room back. Teams keeps the scroll steady by measuring exactly that change and correcting for it, and with new posts at the bottom — at the edge you read from — the correction is what made the posts skip a few at a time. The card is now on the row before the browser lays it out, so there is nothing to correct for, and a row Teams re-renders keeps its card rather than emptying and refilling.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>A post you mark unread is the only one marked:</strong> Teams also marks the posts around the one you chose as unread, and those marks are the channel's, so they were still there after a reload — the cards came back as Unread in a block. The compact view now remembers how far the channel had got when you made the mark, and holds everything stamped at or before that moment read. Your post keeps its <strong>Unread</strong> badge and purple outline until you open it; the rest stay read, whatever Teams badges on them, and a post that arrives afterwards still says Unread.
             </li>
           </ul>
         </li>

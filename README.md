@@ -57,62 +57,53 @@ painted behind the posts, with the desktop setting only as a last resort — so 
 card matches Teams even when the desktop is set the other way, and it repaints
 the moment Teams switches.
 
-The card carries Teams' own **New** badge beside the time, so a folded post says
-at a glance that it has arrived, and it wears a bright purple border instead of
-the usual hairline until it has been read. When Teams clears its own badge — the
-post has been read somewhere Teams counts — the card says **Unread** in its place
-and keeps the border, so a post that stopped being new without being read here
-still waits for a click. Teams' **Last read** divider closes
-the last post you read, so the card copies Teams' own divider into the gap
-underneath that post and centres it between the two cards — same line, same
-wording, same spacing. Where Teams' divider is already on screen, the copy
-stands down rather than double it.
+A post that has arrived, or one answered since you last read it, wears a bright
+purple border and an **Unread** badge beside the time, so what still waits for
+you stands out at a glance. The mark stays until you open the card.
 
-The posts are also split by day. Under the last post of each day runs a line in
-the same shape as Teams' own divider, in a lighter purple, with the date in the
-middle of it: **Today**, **Yesterday**, then the day's name. It is drawn from
-the stamps on the posts themselves, so it holds whether or not Teams prints a
-date on them.
+The posts are also split by day. A line in a lighter purple carries the date in
+the middle of it: **Today**, **Yesterday**, then the day's name, drawn from the
+stamps on the posts themselves. In the default view the line sits above the
+first post of each day, so every run starts with its date; with new posts at the
+bottom it closes the day above it. The date also holds, as wide as the posts,
+naming the day at the edge you are reading from — the top of the list, or the
+bottom when new posts arrive there — and moves on when that day's line arrives.
+It stands on the colour behind it, so the posts scrolling under it cannot be
+read through it; where the pane leaves an empty strip above the list, the date
+is drawn there instead.
 
 A post answered today sits in today's run. The line follows the newest activity
 Teams prints on the row — the post's own time, or a newer reply's — so a post
 lifted back up by a reply is filed under the day it came back rather than the
 day it was written.
 
-Opening a card marks a post read. Closing it again does not, so a post closed
-without being read stays marked. Until a card is opened it keeps its purple
-border and a badge, even after Teams clears its own badge when the channel is
-opened — the word follows Teams (**New** while Teams says new, **Unread** after
-that) but the mark itself does not, because Teams' idea of read is not the one
-this view follows. Opening a post
-that has moved on since you last read it brings the markers back, so a reply, a
-reaction, a new attachment or an edit puts the card back in view.
+Opening a card marks a post read. Closing it again does not. The badge and the
+purple border go the moment the card is opened, and nothing else clears them,
+because Teams' idea of read is not the one this view follows. A post that has
+moved on since you read it — a reply, a reaction, a new attachment or an edit —
+wears the mark again.
 
 ### Manually mark as read
 
-On by default. A post Teams marks **New** keeps its purple border until you open
-its card — Teams clearing its badge when the channel opens does not count as
-reading it — so a channel says at a glance what has arrived. The badge itself
-follows Teams' badge: **New** while Teams still shows one, **Unread** once Teams
-has cleared it and only our mark is left — except for a post you marked unread
-yourself, which always says **Unread**. Turn the switch off and the cards follow
-Teams instead: the badge and purple border show while Teams marks the post new
-and clear when Teams marks it read.
+On by default. A post keeps its **Unread** badge and purple border until you
+open its card — Teams clearing its own badge when the channel opens does not
+count as reading it — so a channel says at a glance what has arrived. Turn the
+switch off and the cards follow Teams instead: the mark shows while Teams marks
+the post new and clears when Teams marks it read.
 
 Changing channel folds whatever was open. A channel is always entered as a list of
 cards, the way it looked before any of them was opened, so a post you were
 reading in one channel does not come back open the next time you visit it.
 
 Marking a post unread brings the badge and border back even on a post already
-marked read, and the card says **Unread** straight away — that mark is your
-decision, not an arrival, so it does not wait for Teams' own badge to clear.
+marked read, and the card says **Unread** straight away.
 Opening the card again is the only thing that clears it — opening it to reach the
 menu is not what does, and closing it again is not either. Teams marks the posts
 around that one unread as well when it does this, and it keeps them marked: the
 marks are the channel's, so they are still there after a reload. This view does
 not follow it there — the mark stays on the one post you chose, a bookmark to
 come back to. The rest stay read, whatever Teams badges on them. A post that
-arrives after the mark is newer than it and says **New** as usual, and one you
+arrives after the mark is newer than it and says **Unread** as usual, and one you
 have read here comes back if it has moved on since (a reply, a reaction, an
 attachment or an edit).
 

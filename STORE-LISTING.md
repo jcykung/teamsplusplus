@@ -36,7 +36,7 @@ zip -r teamsplusplus.zip . \
 | Field | Value |
 | --- | --- |
 | Name | `Teams++` |
-| Summary (132 chars max) | `Turns Microsoft Teams channel posts into compact, scannable cards with New and Unread marks you control.` |
+| Summary (132 chars max) | `Turns Microsoft Teams channel posts into compact, scannable cards with unread marks you control.` |
 | Category | Productivity |
 | Language | English (United States) |
 | Homepage URL | `https://github.com/jcykung/teamsplusplus` |
@@ -53,10 +53,9 @@ and the time, the post's opening line as a headline, and the first two lines of
 the text. Click a card to open the whole post, replies and all; click it again or
 press Escape to fold it. A channel that showed two posts now shows a dozen.
 
-The card carries the read state too. A new post says New while Teams marks it
-new, then Unread once Teams clears that badge, with a purple border until you
-open the card. A post you mark unread yourself comes back as Unread straight
-away. Opening a card is what marks it read — nothing is marked read behind your
+The card carries the read state too. A post that has arrived, or one answered
+since you last read it, wears an Unread badge and a purple border until you open
+the card. A post you mark unread yourself comes back as Unread straight away. Opening a card is what marks it read — nothing is marked read behind your
 back. You can turn that rule off in the popup and follow Teams' own read state
 instead.
 

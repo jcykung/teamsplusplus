@@ -162,11 +162,6 @@
       '[data-tid*="new-message-status" i]'
     ],
 
-    /**
-     * Teams' own "Last read" divider. It sits either inside the post below it
-     * or between the two posts; the folded card draws its own on that seam.
-     */
-    lastRead: ['[data-tid="last-read-line"]', '[data-tid*="last-read" i]'],
 
     /**
      * A channel row in Teams' left rail. Teams signals unread posts by bolding

@@ -15,14 +15,12 @@
  *                           costs nothing until it is unread again.
  *   teamsPlusPlus.view      "inbox" (read posts hidden) or "archives"
  *                           (only read posts shown)
- *   teamsPlusPlus.newPosts  post id -> { n: 1 } while the compact card is still
- *                           new (with `u: 1` when the user marked it unread by
- *                           hand, which the card always calls Unread), or { f }
- *                           with the fingerprint captured when it was read and
- *                           `t`, when that read happened. While the "Manually
- *                           mark as read" switch is on, the only thing that
- *                           marks a post read in the compact view is opening
- *                           its card.
+ *   teamsPlusPlus.newPosts  post id -> { n: 1 } while the compact card is
+ *                           unread, or { f } with the fingerprint captured when
+ *                           it was read and `t`, when that read happened. While
+ *                           the "Manually mark as read" switch is on, the only
+ *                           thing that marks a post read in the compact view is
+ *                           opening its card.
  */
 (function (root) {
   'use strict';
@@ -60,7 +58,7 @@
       id: 'manualRead',
       attr: 'data-tpp-manual-read',
       label: 'Manually mark as read',
-      hint: "A post keeps its purple border until you open its card: the badge says New while Teams still marks it new, then Unread once Teams clears it. Marking a post unread brings it back as Unread straight away, and only for that post. Turn it off to follow Teams instead.",
+      hint: "A post keeps its Unread badge and purple border until you open its card: Teams clearing its own badge when the channel opens does not count as reading it. Marking a post unread brings it back straight away, and only for that post. Turn it off to follow Teams instead.",
       default: true
     },
     {

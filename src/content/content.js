@@ -10,8 +10,7 @@
  *                   or its own New badge. A badge is written down as an unread
  *                   decision the first time it is seen, so the post stays in
  *                   the Inbox after Teams clears the badge. Only the Archive
- *                   button files it. Teams' Last read line is not shown — the
- *                   Inbox and Archive tabs are the marker now.
+ *                   button files it.
  *
  * Everything the user changes is written to chrome.storage.sync, so the same
  * archive and view follow them to every Chrome profile.
@@ -110,9 +109,29 @@
   const VIEW_ARCHIVES = 'archives';
 
   const TABS_ID = 'tpp-tabs';
+  /** The date line held at the edge being read from (updateDayPin). */
+  const DAY_PIN_ID = 'tpp-day-pin';
+  /** Its height, which is also the room the list gives it at the edge. */
+  const DAY_PIN_HEIGHT = 20;
   const CONFETTI_ID = 'tpp-confetti';
   const EMPTY_ID = 'tpp-empty-state';
   const TOAST_ID = 'tpp-toast';
+  /** Teams' "press Ctrl+F" nudge: the surfaces it can be drawn in, and its mark. */
+  const NAG_SURFACES = [
+    '[role="dialog"]',
+    '[role="alert"]',
+    '[role="tooltip"]',
+    '[class*="TeachingPopover"]',
+    '[class*="teaching-popover"]',
+    '[class*="Coachmark"]',
+    '[class*="coachmark"]',
+    '[class*="Callout"]',
+    '[data-tid*="teaching" i]',
+    '[data-tid*="coachmark" i]'
+  ].join(',');
+  const NAG_ATTR = 'data-tpp-nag';
+  const NAG_SHORTCUT = /(?:ctrl|cmd|⌘|command)\s*\+?\s*f\b/i;
+  const NAG_WORD = /\b(?:find|search)\b/i;
   /**
    * How often the idle pass runs while the page mutates for its own reasons.
    *
@@ -137,7 +156,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-05.164';
+  const BUILD = '2026-11-07.1';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -319,11 +338,23 @@
   let composerProbeValue = false;
   /** The element that scrolls the post list, remembered for the scroll handler. */
   let lastScrollBox = null;
+  /** The last post box the pinned line was drawn against (see updateDayPin). */
+  let pinBox = null;
+  /** The pane-header strip the line is drawn in, and the list it was found for. */
+  let pinHost = null;
+  let pinHostPort = null;
+  let pinHostTriedAt = 0;
+  let pinHostTriedPort = null;
+  /** The colour painted behind the list, sampled for the line to stand on. */
+  let pinPaint = '';
+  let pinPaintAt = 0;
   /** Whether a channel's UI has been drawn, so another view tears it down once. */
   let uiDrawn = false;
   /** When the scroll limit was last re-measured from the scroll handler. */
   let clampedAt = 0;
   let toastTimer = 0;
+  /** When the "press Ctrl+F" nudge was last looked for. */
+  let nagCheckedAt = 0;
   /**
    * Clicking a compact post unfolds it, the way a mail app opens a message.
    *
@@ -480,16 +511,12 @@
     } else unfolded.delete(id);
     row.classList.toggle('tpp-unfold', open);
     // Opening the card is what marks a post read in this view. Closing it again
-    // is not: a post closed without being read stays New, and a post marked
+    // is not: a post closed without being read stays unread, and a post marked
     // unread in Teams' own menu reads when it is opened next.
     if (open) {
       lastOpenedRow = row;
       markPostOpened(row);
     }
-    // Opening a post can put Teams' own divider back on screen, so which line
-    // is shown is decided again at once — otherwise the copy stays beside it and
-    // the post shows two. The row also changed height, so the line is re-measured.
-    refreshLastRead();
     // An opened post takes the keyboard the way a message does when Teams is
     // clicked on it: the card that opened it is not a message, so focus is put
     // on the post itself.
@@ -538,7 +565,17 @@
       if (box.scrollHeight <= box.clientHeight + 1) continue;
       const overflow = getComputedStyle(box).overflowY;
       if (overflow === 'visible' || overflow === 'clip') continue;
-      const delta = Math.round(row.getBoundingClientRect().top - box.getBoundingClientRect().top);
+      // The pinned line holds the top of the box when the newest post is first:
+      // the post is opened below it, not under it. A line drawn in the header
+      // takes no room from the list, so the post goes right to the top.
+      const pin = document.getElementById(DAY_PIN_ID);
+      const held =
+        pin && !pin.hidden && !pin.dataset.tppHosted && pin.dataset.tppEdge === 'top'
+          ? DAY_PIN_HEIGHT
+          : 0;
+      const delta = Math.round(
+        row.getBoundingClientRect().top - box.getBoundingClientRect().top - held
+      );
       if (delta) box.scrollTop = Math.max(0, box.scrollTop + delta);
     }
     return row.getBoundingClientRect().top;
@@ -870,13 +907,10 @@
     // the card carries them. With Inbox Zero on, the Inbox and Archive tabs are
     // the marker instead, and these would contradict them.
     const unread = !features.inboxZero && row.dataset.tppNew === '1';
-    // The word follows Teams' own badge: New while it is still on the post,
-    // then Unread once Teams has cleared it and the mark is ours alone. A post
-    // marked unread by hand says Unread whatever Teams shows: that was a
-    // decision, not an arrival. The purple edge stays either way, until the
-    // card is opened.
-    const badgeText = unread ? badgeWordOf(row) : '';
-    const lastRead = !features.inboxZero && endsLastRead(row);
+    // One word for it: new posts and posts answered since they were read are
+    // both just unread. The mark and the purple edge stand until the card is
+    // opened.
+    const badgeText = unread ? 'Unread' : '';
 
     // A card already drawn is left alone unless the post's author, time, words
     // or read markers changed. Everything below reads and rewrites the card,
@@ -889,17 +923,17 @@
       time,
       raw.length,
       raw.slice(0, 24),
-      unread ? 'new' : '',
-      lastRead ? 'seam' : ''
+      unread ? 'unread' : ''
     ].join('|');
-    // A new post reads as new on the card itself: a bright purple edge rather
-    // than the usual hairline. Written before the "nothing changed" return so a
-    // card painted by an older build is corrected on the next paint too.
+    // An unread post reads as unread on the card itself: a bright purple edge
+    // rather than the usual hairline. Written before the "nothing changed"
+    // return so a card painted by an older build is corrected on the next paint
+    // too.
     if (card) {
       card.classList.toggle('tpp-preview-unread', unread);
       // Painted before the fingerprint check: Teams clearing its own badge
-      // leaves the card unread but changes nothing else in it, and that is
-      // exactly the moment the word has to change from New to Unread.
+      // leaves the card unread but changes nothing else in it, and the word has
+      // to stay on it at that moment too.
       paintCardBadge(card, badgeText);
     }
     if (card && row.dataset.tppCardOf === signature) {
@@ -922,7 +956,7 @@
         '<span class="tpp-preview-meta">' +
         '<span class="tpp-preview-name"></span>' +
         '<span class="tpp-preview-time"></span>' +
-        '<span class="tpp-preview-new" hidden>New</span>' +
+        '<span class="tpp-preview-badge" hidden>Unread</span>' +
         '</span>' +
         '<span class="tpp-preview-subject"></span>' +
         '<span class="tpp-preview-snippet"></span>' +
@@ -968,36 +1002,18 @@
     snippetSlot.textContent = snippet;
     snippetSlot.hidden = !snippet;
     paintCardBadge(card, badgeText);
-    paintLastRead(row, lastRead);
     row.classList.add('tpp-previewed');
   }
 
   /**
-   * Writes the word on the card's read mark: Teams' **New** while Teams still
-   * shows its own badge, and **Unread** once Teams has cleared it and the mark
-   * stands on our rule alone. An empty word hides the mark; the purple border is
-   * the card class's business, not this one's.
+   * Writes the word on the card's read mark. An empty word hides the mark; the
+   * purple border is the card class's business, not this one's.
    */
   function paintCardBadge(card, text) {
-    const badge = card && card.querySelector('.tpp-preview-new');
+    const badge = card && card.querySelector('.tpp-preview-badge');
     if (!badge) return;
     badge.hidden = !text;
     if (text && badge.textContent !== text) badge.textContent = text;
-  }
-
-  /**
-   * The word on the card's read mark.
-   *
-   * **New** for as long as Teams' own badge is on the post. **Unread** once
-   * Teams has cleared it and only our mark is left — and always for a post the
-   * user marked unread themselves, whatever Teams is showing: that mark is a
-   * decision, and it stands until the card is opened.
-   */
-  function badgeWordOf(row) {
-    const id = row.dataset.tppId;
-    const record = id ? newState[id] : null;
-    if (record && record.u === 1) return 'Unread';
-    return isUnreadPost(row) ? 'New' : 'Unread';
   }
 
   /** Whether Teams marks this post as unread. */
@@ -1056,7 +1072,7 @@
       Date.now() - (record.t || 0) >= REOPEN_GRACE_MS &&
       Date.now() - lastPointerAt <= BADGE_AFTER_PRESS_MS
     ) {
-      setNewRecord(id, { n: 1, u: 1, f: record.f });
+      setNewRecord(id, { n: 1, f: record.f });
       return true;
     }
 
@@ -1181,8 +1197,8 @@
    *
    * The click is taken as the decision itself: the Badge Teams keeps in the row
    * after an open would otherwise read as the badge the user already read past,
-   * which is why an already-read post could not be put back to New. The mark is
-   * written and the card repainted at once, so the badge and the purple outline
+   * which is why an already-read post could not be put back to unread. The mark
+   * is written and the card repainted at once, so the badge and the outline
    * come back as soon as the menu closes.
    */
   function markPostUnread(row) {
@@ -1196,9 +1212,9 @@
     if (now - manualMarkAt < 500) return;
     manualMarkAt = now;
     const fingerprint = activityOf(row);
-    // `u` is the user's own mark: the card says Unread for it however Teams
-    // labels the post, and only opening the card clears it.
-    setNewRecord(id, fingerprint ? { n: 1, u: 1, f: fingerprint } : { n: 1, u: 1 });
+    // `n` is the mark itself: it stays until the card is opened, whatever
+    // Teams does with its own badge afterwards.
+    setNewRecord(id, fingerprint ? { n: 1, f: fingerprint } : { n: 1 });
     row.dataset.tppNew = '1';
     // Teams answers by marking every message newer than this one unread too.
     // Those posts are not news — they were read before the click — so what each
@@ -1458,7 +1474,7 @@
    * Takes a channel's dot down once the posts it stood for have been read.
    *
    * The posts are the answer, not Teams' cue: with the compact view a post
-   * stays New until the user reads it by hand, so a channel with none left is
+   * stays unread until the user reads it by hand, so a channel with none left is
    * one they have cleared — and the dot must go then, on its own, without the
    * channel having to be clicked a second time. Teams' cue is only asked as a
    * courtesy, in case it is still painting the channel that was just opened
@@ -1684,115 +1700,6 @@
     return false;
   }
 
-  /**
-   * Whether Teams' "Last read" divider closes this post — that is, whether this
-   * is the last post that has been read. Teams ends the divider where the read
-   * section ends, and where that element is rendered varies by build: inside the
-   * last-read post, as its own element between two posts, or at the top of the
-   * first unread one. All three mean the same boundary, and all three put the
-   * line under the post above it — which is what this answers.
-   */
-  function endsLastRead(row) {
-    try {
-      const inside = first(S.lastRead, row);
-      if (inside) {
-        const head = row.querySelector('.tpp-head');
-        // Below the post's header it is this post's own footer. Above it, it is
-        // the line between the two posts, so it belongs to the one before.
-        if (!head) return true;
-        const aboveHead = Boolean(
-          inside.compareDocumentPosition(head) & Node.DOCUMENT_POSITION_FOLLOWING
-        );
-        if (!aboveHead) return true;
-      }
-
-      // The next post, and any divider rendered between the two of them.
-      const selector = (S.lastRead || []).join(',');
-      let next = row.nextElementSibling;
-      while (next) {
-        if (next.matches(selector) || next.querySelector(selector)) {
-          return true;
-        }
-        const post = next.classList.contains('tpp-post')
-          ? next
-          : next.querySelector('.tpp-post');
-        if (post) {
-          const inPost = first(S.lastRead, post);
-          const postHead = post.querySelector('.tpp-head');
-          return Boolean(
-            inPost &&
-              postHead &&
-              inPost.compareDocumentPosition(postHead) & Node.DOCUMENT_POSITION_FOLLOWING
-          );
-        }
-        next = next.nextElementSibling;
-      }
-      return false;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /** Teams' own "Last read" divider for this post, wherever the build puts it. */
-  function nativeLastRead(row) {
-    const inside = first(S.lastRead, row);
-    if (inside) return inside;
-
-    const selector = (S.lastRead || []).join(',');
-    let next = row.nextElementSibling;
-    while (next) {
-      if (next.matches(selector)) return next;
-      const found = next.querySelector(selector);
-      if (found) return found;
-      if (next.classList.contains('tpp-post') || next.querySelector('.tpp-post')) return null;
-      next = next.nextElementSibling;
-    }
-    return null;
-  }
-
-  /**
-   * Re-decides the "Last read" line on every post: Teams' own line may have just
-   * appeared (or vanished) with a post being opened, and the copy follows it.
-   */
-  function refreshLastRead() {
-    for (const row of document.querySelectorAll('.tpp-post')) {
-      paintLastRead(row, endsLastRead(row));
-    }
-    syncLastReadBands();
-    // A line that has just appeared in a gap goes there alone: the day's line
-    // under the same post would sit on top of it.
-    refreshDaySeparators();
-  }
-
-  /**
-   * Takes the band off any row that no longer carries the line. A stale band is
-   * 26px of empty space of its own, which is how opening and closing a post could
-   * leave the gap above it wider than it was.
-   */
-  function syncLastReadBands() {
-    for (const row of document.querySelectorAll('.tpp-last-read-row')) {
-      if (!row.querySelector(':scope > [data-tpp-ui="last-read"]')) {
-        row.classList.remove('tpp-last-read-row');
-      }
-    }
-  }
-
-  /** Whether an element is actually painted: a hidden one has no boxes. */
-  function hasBox(el) {
-    try {
-      return el.getClientRects().length > 0 && el.getBoundingClientRect().height > 0;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /** Places the "Last read" lines, and the day's lines, on the page. */
-  function placeLastRead() {
-    for (const seam of document.querySelectorAll('.tpp-last-read')) {
-      placeSeam(seam, 'tpp-last-read-row');
-    }
-  }
-
   function placeDaySeparators() {
     for (const seam of document.querySelectorAll('.tpp-day-sep')) {
       placeSeam(seam, 'tpp-day-row');
@@ -1800,9 +1707,9 @@
   }
 
   /**
-   * Puts a line in the middle of the gap under the post it closes, measuring
-   * from the visible edges of the two posts rather than from the boxes around
-   * them, whose padding would pull the line off centre.
+   * Puts a line in the middle of the gap beside the post it belongs to,
+   * measuring from the visible edges of the two posts rather than from the boxes
+   * around them, whose padding would pull the line off centre.
    *
    * `band` is the row class that gives the line a band of its own: an open row
    * measured to its padded bottom would put the gap above the line and drop the
@@ -1850,8 +1757,8 @@
     const floor = bottom - rowRect.top + 2;
 
     // The line is measured where it is drawn and moved by the difference, so
-    // any offset between its box and the line inside it (a copied divider with
-    // margins, a clipped one) is taken out instead of assumed away.
+    // any offset between its box and the line inside it (a margin, a clipped
+    // one) is taken out instead of assumed away.
     const drawn = seam.getBoundingClientRect();
     const top = drawn.height
       ? (parseFloat(seam.style.top) || 0) + (target - (drawn.top + drawn.height / 2))
@@ -1861,84 +1768,6 @@
     // and a mutation on our own node is what a scan loop feeds on.
     const nextTop = `${Math.round(Math.max(top, floor))}px`;
     if (seam.style.top !== nextTop) seam.style.top = nextTop;
-  }
-
-  /**
-   * Teams' "Last read" divider closes the last-read post, so the folded card
-   * carries a copy of Teams' own divider underneath itself — the line, the word
-   * and the spacing are Teams' own, in Teams' own place and in either theme. It
-   * sits in the row's own flow after the card, so it takes its line and nothing
-   * more: no reserved band, and so no gap over the first unread post.
-   */
-  function paintLastRead(row, wanted) {
-    let seam = row.querySelector(':scope > [data-tpp-ui="last-read"]');
-
-    // Inbox Zero replaces both read markers with its own tabs, so nothing is
-    // drawn then — the gate that also keeps a revived feature from doubling up.
-    if (features && features.inboxZero) {
-      seam?.remove();
-      row.classList.remove('tpp-last-read-row');
-      return;
-    }
-
-    const native = wanted ? nativeLastRead(row) : null;
-    // Teams' own line, when it is really painted on the page, is the one to
-    // show: a copy would double it. A divider the fold covers has no boxes at
-    // all, so it is not on screen and the copy is drawn instead. Deciding this by
-    // drawing rather than by where the element sits is what keeps a hidden
-    // divider from leaving the condensed view with no line at all.
-    const shownByTeams = Boolean(native) && hasBox(native);
-    // No card, no line: a row the fold could not draw is not a post to mark, and
-    // the band would show up as a gap on its own.
-    const carded = Boolean(row.querySelector(':scope > [data-tpp-ui="preview"]'));
-
-    if (!wanted || shownByTeams || !carded) {
-      seam?.remove();
-      row.classList.remove('tpp-last-read-row');
-      return;
-    }
-    // The row gives the line a small band of its own, so it is not crammed into
-    // the gap Teams leaves between posts.
-    row.classList.add('tpp-last-read-row');
-    if (seam) return;
-
-    seam = document.createElement('div');
-    seam.className = 'tpp-last-read';
-    seam.dataset.tppUi = 'last-read';
-    seam.setAttribute('aria-hidden', 'true');
-    // In pixels from the start: placeLastRead reads this back to correct itself.
-    seam.style.top = '0px';
-
-    if (native) {
-      const copy = native.cloneNode(true);
-      copy.removeAttribute('id');
-      copy.removeAttribute('role');
-      copy.removeAttribute('aria-labelledby');
-      copy.removeAttribute('data-tid');
-      copy.classList.remove('tpp-detail');
-      copy.classList.add('tpp-last-read-native');
-      for (const el of copy.querySelectorAll('[id]')) el.removeAttribute('id');
-      // Nothing in the copy may look like Teams' divider again, or the next scan
-      // would take our own copy for the real thing and skip drawing.
-      for (const el of copy.querySelectorAll('[data-tid]')) el.removeAttribute('data-tid');
-      seam.append(copy);
-    } else {
-      // Nothing to copy (a build that draws the divider elsewhere): the same
-      // line-and-label shape, in the page's own colours.
-      seam.innerHTML =
-        '<span class="tpp-last-read-line"></span>' +
-        '<span class="tpp-last-read-label">Last read</span>' +
-        '<span class="tpp-last-read-line"></span>';
-    }
-    // After the card, not before it: the line ends the last-read post.
-    row.append(seam);
-
-    // One boundary, one line: a copy left on a recycled or duplicated row goes.
-    for (const other of (findMessageList() || document).querySelectorAll(
-      '[data-tpp-ui="last-read"]'
-    )) {
-      if (other !== seam) other.remove();
-    }
   }
 
   /**
@@ -1970,22 +1799,18 @@
   /**
    * Draws the line that separates one day's posts from the next.
    *
-   * It ends the last post of a day, in the same place and the same shape as
-   * Teams' own "Last read" line, and carries the date instead of the word. A
-   * gap that already carries that line keeps only it: two lines in one gap would
-   * sit on top of each other, and the read boundary is the more useful of the
-   * two to see.
+   * The line hangs in the gap after `row`, in the light purple and with the date
+   * in it. Which row carries it, and which date it names, depends on the order
+   * Teams lists the posts in — see refreshDaySeparators.
    */
   function paintDaySeparator(row, ts) {
     let sep = row.querySelector(':scope > [data-tpp-ui="day-sep"]');
-    // Inbox Zero replaces the read markers with its own tabs, and the last-read
-    // seam is the boundary there.
+    // Inbox Zero replaces the read markers with its own tabs.
     const wanted =
       Boolean(features) &&
       features.compactPosts &&
       !features.inboxZero &&
-      ts > 0 &&
-      !endsLastRead(row);
+      ts > 0;
     if (!wanted) {
       sep?.remove();
       row.classList.remove('tpp-day-row');
@@ -2001,7 +1826,8 @@
         '<span class="tpp-day-line"></span>' +
         '<span class="tpp-day-label"></span>' +
         '<span class="tpp-day-line"></span>';
-      // After the post, not before it: the line ends the day it belongs to.
+      // In the gap after the row: above the day below it in newest-first order,
+      // below the day it names in newest-last order.
       row.append(sep);
     }
     const label = dayLabelOf(ts);
@@ -2010,13 +1836,41 @@
   }
 
   /**
-   * Decides which posts end a day, and draws the line under them.
+   * Whether the list prints its newest post at the top, as Teams does by
+   * default. The "See new posts at bottom" setting turns the list round, and the
+   * day's line closes each day's run instead of opening it.
+   */
+  function postsNewestFirst(list) {
+    const scope = list || (lastList && lastList.isConnected ? lastList : null);
+    if (!scope) return true;
+    // The answer is kept on the list rather than read again on every frame. A
+    // row Teams is re-drawing loses its stamp for a moment, and reading the two
+    // ends then said "newest first" — which turned the day's lines and the
+    // pinned edge round for a frame and moved the posts under the reader. Only
+    // a clear reading of both ends moves it.
+    const rows = scope.querySelectorAll('.tpp-post');
+    if (rows.length >= 2) {
+      const first = Number(rows[0].dataset.tppTs) || 0;
+      const last = Number(rows[rows.length - 1].dataset.tppTs) || 0;
+      if (first && last && first !== last) {
+        const order = first > last ? '1' : '0';
+        if (scope.dataset.tppNewestFirst !== order) scope.dataset.tppNewestFirst = order;
+      }
+    }
+    return scope.dataset.tppNewestFirst !== '0';
+  }
+
+  /**
+   * Decides where the day's lines go, and what they say.
    *
-   * The rows are walked in the order Teams lists them: a post ends its day when
-   * the next post with a stamp is from another day. A post whose stamp cannot be
-   * read is passed over rather than guessed at, and the day after it is still
-   * compared with the day before it, so one unreadable post cannot split a day
-   * in two or join two together.
+   * The rows are walked in the order Teams lists them. A post ends its day when
+   * the next post with a stamp is from another day. Newest first, that boundary
+   * is drawn above the older day's first post — the gap after this one — and says
+   * that older day, so each day's run starts with its date. Newest last, the
+   * line closes the day whose posts are above it, as before. A post whose stamp
+   * cannot be read is passed over rather than guessed at, and the day after it is
+   * still compared with the day before it, so one unreadable post cannot split a
+   * day in two or join two together.
    */
   function refreshDaySeparators() {
     if (!features || !features.compactPosts) {
@@ -2042,17 +1896,458 @@
 
     // Filled from the end so the next dated post is known in one pass.
     const nextDay = new Array(dated.length).fill('');
+    const nextIndex = new Array(dated.length).fill(-1);
     let ahead = '';
+    let aheadIndex = -1;
     for (let i = dated.length - 1; i >= 0; i -= 1) {
       nextDay[i] = ahead;
-      if (dated[i].day) ahead = dated[i].day;
+      nextIndex[i] = aheadIndex;
+      if (dated[i].day) {
+        ahead = dated[i].day;
+        aheadIndex = i;
+      }
     }
 
+    const newestFirst = postsNewestFirst(lastList);
     for (let i = 0; i < dated.length; i += 1) {
       const entry = dated[i];
-      const endsDay = Boolean(entry.day) && Boolean(nextDay[i]) && nextDay[i] !== entry.day;
-      paintDaySeparator(entry.row, endsDay ? entry.ts : 0);
+      const next = nextIndex[i];
+      const boundary = Boolean(entry.day) && next >= 0 && nextDay[i] !== entry.day;
+      if (!boundary) {
+        paintDaySeparator(entry.row, 0);
+      } else if (newestFirst) {
+        paintDaySeparator(entry.row, dated[next].ts);
+      } else {
+        paintDaySeparator(entry.row, entry.ts);
+      }
     }
+  }
+
+  /** The box the list scrolls in: the viewport Teams wraps the rows in. */
+  function scrollPortOf(list) {
+    return lastScrollBox && lastScrollBox.isConnected && lastScrollBox.contains(list)
+      ? lastScrollBox
+      : scrollBoxFor(list);
+  }
+
+  /**
+   * The empty strip Teams leaves in the pane header, which the date line is drawn in.
+   *
+   * The line used to be fixed over the posts, which cost the list 20px of its own
+   * height to stand in — room that moved every post under the reader when it was
+   * given back and taken again. Teams leaves an empty flex box above the list, and
+   * a line drawn there rides above the posts instead: the list keeps its height
+   * and nothing scrolls beneath a strip that is not part of it.
+   *
+   * The strip is found by its shape rather than its generated class names: an
+   * empty div, most of the list's width, sitting above the list in an earlier
+   * branch of the pane. The nearest one wins, which is the strip directly above
+   * the posts rather than a spacer further up the header.
+   */
+  function dayPinHost(port) {
+    const portBox = port && port.getBoundingClientRect();
+    if (!portBox || portBox.height < 40) return null;
+
+    const isSlot = (el) => {
+      if (!(el instanceof HTMLElement) || el.tagName !== 'DIV') return false;
+      if (el.childElementCount || el.textContent.trim()) return false;
+      if (el.hasAttribute('data-tpp-ui') || !el.getClientRects().length) return false;
+      // The strip is beside the list, not in it and not a wrapper around it.
+      if (port.contains(el) || el.contains(port)) return false;
+      const box = el.getBoundingClientRect();
+      if (box.width < Math.min(120, portBox.width * 0.4)) return false;
+      if (box.bottom > portBox.top + 2) return false;
+      // A strip too short for the line, and clipped at that, would hide it.
+      if (box.height < DAY_PIN_HEIGHT) {
+        const style = getComputedStyle(el);
+        if (style.overflowY === 'hidden' || style.overflowY === 'clip') return false;
+      }
+      return true;
+    };
+
+    let best = null;
+    let node = port;
+    for (let depth = 0; depth < 8 && node && node !== document.body; depth += 1) {
+      const parent = node.parentElement;
+      if (!parent) break;
+      // Every sibling, whichever side of the list it sits on in the markup:
+      // a pane that lays out bottom-up puts the header after the list. Only a
+      // box that ends above the list's top is a strip over it.
+      for (const sib of parent.children) {
+        if (sib === node) continue;
+        const pool = [sib];
+        if (sib.childElementCount) pool.push(...sib.querySelectorAll('div'));
+        for (const el of pool) {
+          if (!isSlot(el)) continue;
+          const distance = portBox.top - el.getBoundingClientRect().bottom;
+          if (!best || distance < best.distance) best = { el, distance };
+        }
+      }
+      node = parent;
+    }
+    return best ? best.el : null;
+  }
+
+  /**
+   * The colour painted behind the list, for the line to stand on.
+   *
+   * A line over the posts needs a surface of its own, and the one colour that is
+   * always right is the colour it covers: the list's own background, or the
+   * nearest painted box above it. Teams repaints that per theme, so the colour
+   * is sampled rather than guessed from a palette of ours, and a light or dark
+   * switch is followed without a rule of its own.
+   */
+  function paintBehind(start) {
+    for (let node = start; node; node = node.parentElement) {
+      const color = String(getComputedStyle(node).backgroundColor || '');
+      const rgb = /rgba?\(([^)]+)\)/.exec(color);
+      if (!rgb) continue;
+      const parts = rgb[1].split(/[,\s/]+/).filter(Boolean).map(Number);
+      if (parts.length < 3 || !parts.slice(0, 3).every(Number.isFinite)) continue;
+      // Half-transparent paint lets the posts through, which is the thing the
+      // surface is there to stop; only a colour of its own will do.
+      const alpha = parts.length > 3 ? parts[3] : 1;
+      if (!Number.isFinite(alpha) || alpha < 0.99) continue;
+      return `rgb(${parts[0]}, ${parts[1]}, ${parts[2]})`;
+    }
+    return '';
+  }
+
+  /**
+   * The colour behind the line, re-read a couple of times a second at most.
+   *
+   * It is taken from the card at the edge rather than the pane, because that is
+   * what is under the line as it scrolls: Teams' cards are a shade of their own,
+   * and a band cut from the pane's surface is a stripe across them. A post that
+   * is open has no card, and then the list's own colour is the one to match.
+   */
+  function pinPaintFor(port, row) {
+    const now = performance.now();
+    if (pinPaint && now - pinPaintAt < 500) return pinPaint;
+    pinPaintAt = now;
+    const card = row ? row.querySelector('.tpp-preview') : null;
+    pinPaint = paintBehind(card || row || port) || pinPaint;
+    return pinPaint;
+  }
+
+  /** The header strip for this list, cached: the lookup walks the pane header. */
+  function pinHostFor(list) {
+    const port = scrollPortOf(list);
+    if (!port) return null;
+    if (pinHost && pinHost.isConnected && pinHostPort === port) {
+      // A strip the pane has collapsed or hidden takes the line with it: the
+      // overlay over the posts is the fallback until it is back on screen.
+      if (pinHost.getClientRects().length) return pinHost;
+      restorePinHost();
+      return null;
+    }
+    // A pane with no such strip is asked again at most once a second: this runs
+    // on rebuilds and on scroll frames, not on every pixel of a scroll.
+    const now = performance.now();
+    if (!pinHost && pinHostTriedPort === port && now - pinHostTriedAt < 1000) return null;
+    pinHostTriedPort = port;
+    pinHostTriedAt = now;
+    if (pinHost && pinHostPort !== port) restorePinHost();
+    pinHost = dayPinHost(port);
+    pinHostPort = port;
+    return pinHost;
+  }
+
+  /** Puts the line in the header strip, or back over the list when there is none. */
+  function mountDayPin(pin, host) {
+    if (!host) {
+      if (pin.parentElement !== document.body) document.body.append(pin);
+      delete pin.dataset.tppHosted;
+      return;
+    }
+    if (pin.parentElement !== host) host.append(pin);
+    // An absolutely placed child needs a containing box. The strip's own inline
+    // position is written down so teardown can give it back exactly.
+    if (!host.hasAttribute('data-tpp-pin-host')) {
+      host.dataset.tppPinHostPos = host.style.position || '';
+      if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+      host.setAttribute('data-tpp-pin-host', '');
+    }
+    pin.dataset.tppHosted = '1';
+  }
+
+  /** Gives every strip back the position the pin borrowed from it. */
+  function restorePinHost() {
+    for (const host of document.querySelectorAll('[data-tpp-pin-host]')) {
+      host.style.position = host.dataset.tppPinHostPos || '';
+      host.removeAttribute('data-tpp-pin-host');
+      delete host.dataset.tppPinHostPos;
+    }
+    pinHost = null;
+    pinHostPort = null;
+  }
+
+  /**
+   * The line that holds the date at the edge being read from.
+   *
+   * The drawn separators live in the gaps between posts, so they travel with the
+   * list. This one names the day at the reading edge and stands there until the
+   * next day's line takes over. Teams leaves an empty strip in the pane header,
+   * and the line is drawn in it (dayPinHost): it then rides above the posts
+   * without the list giving up any of its height. A pane with no such strip
+   * still gets the line as a fixed overlay at the edge of the scroll box.
+   * It is `pointer-events: none` so nothing is ever in the way of a click, and a
+   * separator already sitting at the edge is held out of sight rather than
+   * doubled.
+   */
+  function updateDayPin(list) {
+    if (!features || !features.compactPosts || features.inboxZero) {
+      hideDayPin();
+      dropDayPinInset();
+      return;
+    }
+
+    // The edge to hold the line against is the visible one: the box that
+    // scrolls. Teams nests the rows in a runway inside the viewport, and the
+    // runway moves with the posts, so its own box is no edge at all. The scan has
+    // already found the box; this runs on every scroll frame, so it is not asked
+    // again unless the list has moved out of it.
+    const port = scrollPortOf(list);
+    if (!port || !port.isConnected || !port.getClientRects().length) {
+      hideDayPin();
+      return;
+    }
+
+    const rect = port.getBoundingClientRect();
+    if (rect.width < 120 || rect.height < 80) {
+      hideDayPin();
+      return;
+    }
+
+    // The line needs its own room at the edge, or the first post at the end of
+    // the scroll sits under it. The list gives it that much padding before its
+    // first post (newest first) or after its last (newest last). It is given by
+    // the scan, before anything is measured, and only when the edge changes: a
+    // scroll frame that rewrote the list's height is what moved the posts under
+    // the reader, and in the bottom order it was worse, because the extra room
+    // sat in the scroll range the reader was already at the end of.
+    const newestFirst = postsNewestFirst(list);
+    const host = pinHostFor(list);
+    if (host) {
+      // The header carries the line, so the list keeps its full height: any
+      // room an earlier layout borrowed for an overlay is given back, once.
+      if (list.dataset.tppPinEdge !== undefined) dropDayPinInset();
+    } else if (list.dataset.tppPinEdge !== (newestFirst ? 'top' : 'bottom')) {
+      applyDayPinInset(list, newestFirst);
+    }
+
+    const edge = newestFirst ? rect.top : rect.bottom;
+    const row = postAtEdge(list, rect, newestFirst);
+    const label = dayAtEdge(list, rect, newestFirst, row);
+    if (!label) {
+      hideDayPin();
+      return;
+    }
+
+    // The line is drawn as wide as the posts, not the pane: Teams insets its
+    // list, and a line running edge to edge does not sit with the cards. Both
+    // edges come from a post's own box and are held inside the pane, so the
+    // label's centre is the middle of the post's box. The last good box stands
+    // in for a frame with no post at the edge.
+    const box = row && row.getBoundingClientRect();
+    if (box && box.width > 80) pinBox = { left: box.left, width: box.width };
+    const bounds = pinBox || { left: rect.left, width: port.clientWidth };
+    const pinLeft = Math.min(Math.max(bounds.left, rect.left), rect.right - 1);
+    const pinRight = Math.min(bounds.left + bounds.width, rect.right);
+
+    const pin = dayPinEl();
+    mountDayPin(pin, host);
+
+    // In the header the line is placed against the strip, not the window: the
+    // same post-wide span, held inside the strip and centred in its height.
+    let left;
+    let width;
+    let top;
+    if (host) {
+      const hostBox = host.getBoundingClientRect();
+      const from = Math.min(Math.max(pinLeft, hostBox.left), hostBox.right - 1);
+      const to = Math.min(pinRight, hostBox.right);
+      left = `${Math.round(from - hostBox.left)}px`;
+      width = `${Math.max(0, Math.round(to - from))}px`;
+      top = `${Math.max(0, Math.round((hostBox.height - DAY_PIN_HEIGHT) / 2))}px`;
+    } else {
+      left = `${Math.round(pinLeft)}px`;
+      width = `${Math.max(0, Math.round(pinRight - pinLeft))}px`;
+      top = `${Math.round(newestFirst ? rect.top : rect.bottom - DAY_PIN_HEIGHT)}px`;
+    }
+    if (pin.style.left !== left) pin.style.left = left;
+    if (pin.style.width !== width) pin.style.width = width;
+    if (pin.style.top !== top) pin.style.top = top;
+    // Over the posts the line needs a surface; in the header it stands on the
+    // pane's own padding and a band there would only be a stripe.
+    const paint = host ? '' : pinPaintFor(port, row);
+    if (paint && pin.style.background !== paint) pin.style.background = paint;
+    else if (!paint && pin.style.background) pin.style.background = '';
+    pin.dataset.tppEdge = newestFirst ? 'top' : 'bottom';
+    const slot = pin.querySelector('.tpp-day-label');
+    if (slot && slot.textContent !== label) slot.textContent = label;
+    if (pin.hidden) pin.hidden = false;
+
+    // One line at the edge: the drawn separator that has arrived there is held
+    // while the pin stands in for it, so the date is not printed twice.
+    for (const sep of list.querySelectorAll('.tpp-day-sep')) {
+      const box = sep.getBoundingClientRect();
+      const near = newestFirst
+        ? box.top < edge + DAY_PIN_HEIGHT && box.bottom > edge
+        : box.bottom > edge - DAY_PIN_HEIGHT && box.top < edge;
+      sep.classList.toggle('tpp-day-sep-held', near);
+    }
+  }
+
+  /**
+   * The date at the edge being read from.
+   *
+   * A drawn line that has reached the edge speaks first: its label is the day on
+   * the far side of it, and it arrives a moment before that day's first post
+   * does — using the post alone made the held line hand over late, with a day's
+   * posts already under a pin still naming the day before. With no line at the
+   * edge, the day is the one the post there belongs to.
+   */
+  function dayAtEdge(list, rect, newestFirst, row) {
+    const edge = newestFirst ? rect.top : rect.bottom;
+    let best = null;
+    for (const sep of list.querySelectorAll('.tpp-day-sep')) {
+      const label = sep.querySelector('.tpp-day-label')?.textContent || '';
+      if (!label) continue;
+      const box = sep.getBoundingClientRect();
+      if (newestFirst) {
+        if (box.top <= edge + 1 && (!best || box.top > best.top)) {
+          best = { top: box.top, label };
+        }
+      } else if (box.bottom >= edge - 1 && (!best || box.bottom < best.bottom)) {
+        best = { bottom: box.bottom, label };
+      }
+    }
+    if (best) return best.label;
+
+    return row ? dayLabelOf(activityStampOf(row)) : '';
+  }
+
+  /** The post at the edge of the scroll box, or the nearest one within a line. */
+  function postAtEdge(list, rect, newestFirst) {
+    const x = Math.round(rect.left + rect.width / 2);
+    const y = newestFirst ? rect.top + 9 : rect.bottom - 9;
+    try {
+      const hit = document.elementFromPoint(x, y);
+      const row = hit && hit.closest('.tpp-post');
+      if (row && list.contains(row)) return row;
+    } catch (_) {
+      // No point lookup on this page: fall through to the boxes.
+    }
+
+    // A header or a margin took the point: the post whose box holds the edge is
+    // the one being read.
+    let nearest = null;
+    let distance = Infinity;
+    for (const row of list.querySelectorAll('.tpp-post')) {
+      const box = row.getBoundingClientRect();
+      if (box.height <= 0) continue;
+      if (y >= box.top && y <= box.bottom) return row;
+      const gap = Math.min(Math.abs(y - box.top), Math.abs(y - box.bottom));
+      if (gap < distance) {
+        distance = gap;
+        nearest = row;
+      }
+    }
+    return distance <= 40 ? nearest : null;
+  }
+
+  /**
+   * Hides the held line and lets the drawn lines show.
+   *
+   * The room it borrowed stays where it is: taking 20px off the list and
+   * putting it back a moment later is a jump of its own, and the pin returns on
+   * the next frame in any case. Only a pin that is gone for good gives the room
+   * back (dropDayPinInset).
+   */
+  function hideDayPin() {
+    const pin = document.getElementById(DAY_PIN_ID);
+    if (pin && !pin.hidden) pin.hidden = true;
+    for (const sep of document.querySelectorAll('.tpp-day-sep-held')) {
+      sep.classList.remove('tpp-day-sep-held');
+    }
+  }
+
+  /** Gives the list back the room the pin borrowed, for a pin that is gone. */
+  function dropDayPinInset() {
+    for (const el of document.querySelectorAll('[data-tpp-pin-edge]')) {
+      restoreDayPinInset(el);
+    }
+    pinBox = null;
+  }
+
+  /**
+   * Gives the pinned line its 20px at the edge being read from: before the first
+   * post when the newest is on top, after the last when it is at the bottom. The
+   * change is made only when the edge changes, so scrolling does not rewrite the
+   * list's padding on every frame.
+   */
+  function applyDayPinInset(list, newestFirst) {
+    const edge = newestFirst ? 'top' : 'bottom';
+    if (list.dataset.tppPinEdge === edge) {
+      // The edge is the same; make sure the padding is still there. Teams
+      // rewrites style attributes as it re-renders, and a padding taken back
+      // that way would leave the first post under the line again.
+      const base =
+        parseFloat(
+          edge === 'top' ? list.dataset.tppPinTopBase : list.dataset.tppPinBottomBase
+        ) || 0;
+      const pad =
+        parseFloat(getComputedStyle(list)[edge === 'top' ? 'paddingTop' : 'paddingBottom']) || 0;
+      if (pad >= base + DAY_PIN_HEIGHT - 1) return;
+    }
+    restoreDayPinInset(list);
+
+    if (newestFirst) {
+      list.dataset.tppPinTopInline = list.style.paddingTop || '';
+      list.dataset.tppPinTopBase = getComputedStyle(list).paddingTop;
+      const base = parseFloat(list.dataset.tppPinTopBase) || 0;
+      list.style.paddingTop = `${base + DAY_PIN_HEIGHT}px`;
+    } else {
+      list.dataset.tppPinBottomInline = list.style.paddingBottom || '';
+      list.dataset.tppPinBottomBase = getComputedStyle(list).paddingBottom;
+      const base = parseFloat(list.dataset.tppPinBottomBase) || 0;
+      list.style.paddingBottom = `${base + DAY_PIN_HEIGHT}px`;
+    }
+    list.dataset.tppPinEdge = edge;
+  }
+
+  /** Restores whatever padding the list had before the pin borrowed its edge. */
+  function restoreDayPinInset(list) {
+    if (!list || list.dataset.tppPinEdge === undefined) return;
+    if (list.dataset.tppPinTopInline !== undefined) {
+      list.style.paddingTop = list.dataset.tppPinTopInline;
+      delete list.dataset.tppPinTopInline;
+      delete list.dataset.tppPinTopBase;
+    }
+    if (list.dataset.tppPinBottomInline !== undefined) {
+      list.style.paddingBottom = list.dataset.tppPinBottomInline;
+      delete list.dataset.tppPinBottomInline;
+      delete list.dataset.tppPinBottomBase;
+    }
+    delete list.dataset.tppPinEdge;
+  }
+
+  /** The fixed element the pin is drawn in, made on first use. */
+  function dayPinEl() {
+    let pin = document.getElementById(DAY_PIN_ID);
+    if (pin) return pin;
+    pin = document.createElement('div');
+    pin.id = DAY_PIN_ID;
+    pin.className = 'tpp-day-pin';
+    pin.dataset.tppUi = 'day-pin';
+    pin.setAttribute('aria-hidden', 'true');
+    pin.innerHTML =
+      '<span class="tpp-day-line"></span>' +
+      '<span class="tpp-day-label"></span>' +
+      '<span class="tpp-day-line"></span>';
+    document.body.append(pin);
+    return pin;
   }
 
   /**
@@ -2878,9 +3173,9 @@
         saveReadSoon();
         isRead = false;
       }
-      // The compact view's own marker: a latched New badge keeps the card new
-      // until its card is opened (markPostOpened), however soon Teams clears
-      // its own badge.
+      // The compact view's own marker: a latched unread mark keeps the card
+      // unread until its card is opened (markPostOpened), however soon Teams
+      // clears its own badge.
       if (refreshNewPost(id, row, ts, base)) row.dataset.tppNew = '1';
       else if (row.dataset.tppNew !== undefined) delete row.dataset.tppNew;
 
@@ -2902,10 +3197,19 @@
     // The posts are now read: the rail's dot for this channel is decided with
     // them rather than from Teams' bold, which went as the channel opened.
     settleRailUnread();
-    syncLastReadBands();
-    placeLastRead();
+    // The pinned line's room is given here, before the lines are measured, and
+    // only from a scan: the walk that follows measures every gap against it,
+    // and a scroll frame that rewrote the list's height would move the posts
+    // under the reader.
+    if (features && features.compactPosts && !features.inboxZero) {
+      // The header strip takes the line without the list giving up any room; the
+      // inset is only for a pane where the line has to sit over the posts.
+      if (pinHostFor(list)) dropDayPinInset();
+      else applyDayPinInset(list, postsNewestFirst(list));
+    }
     refreshDaySeparators();
     placeDaySeparators();
+    updateDayPin(lastList);
     applyViewFiltering();
   }
 
@@ -3168,7 +3472,6 @@
       'tpp-unfold',
       'tpp-previewed',
       'tpp-ready',
-      'tpp-last-read-row',
       'tpp-day-row'
     );
     delete row.dataset.tppPainted;
@@ -3494,7 +3797,9 @@
 
   function clearTopInset(list) {
     const target = list || lastList || findMessageList();
-    if (!target || target.dataset.tppPadApplied !== '1') return;
+    if (!target) return;
+    restoreDayPinInset(target);
+    if (target.dataset.tppPadApplied !== '1') return;
     target.style.paddingTop = target.dataset.tppPadInline || '';
     delete target.dataset.tppPadApplied;
     delete target.dataset.tppPadInline;
@@ -4216,6 +4521,40 @@
   }
 
   /**
+   * Takes Teams' own "press Ctrl+F" nudge out of sight.
+   *
+   * The nudge is a teaching popover in the app's chrome rather than a post, so
+   * it is found by what it says: a small surface carrying the shortcut and the
+   * word the shortcut stands for. The mark it is given hides it; Teams re-renders
+   * the nudge as a new node, and the next check marks that one too.
+   */
+  function muteSearchNag() {
+    let surfaces;
+    try {
+      surfaces = document.querySelectorAll(NAG_SURFACES);
+    } catch (_) {
+      return; // A hand-edited selector should never cost us the page.
+    }
+    for (const el of surfaces) {
+      if (el.hasAttribute(NAG_ATTR)) continue;
+      if (el.closest('.tpp-post, [data-tpp-ui]')) continue;
+      const text = collapse(el.textContent || '');
+      // A pane of the app is not a nudge: only a small surface is read.
+      if (!text || text.length > 240) continue;
+      if (!NAG_SHORTCUT.test(text) || !NAG_WORD.test(text)) continue;
+      el.setAttribute(NAG_ATTR, '1');
+    }
+  }
+
+  /** The nudge check for a scroll frame: no more than twice a second. */
+  function muteSearchNagSoon() {
+    const now = Date.now();
+    if (now - nagCheckedAt < 500) return;
+    nagCheckedAt = now;
+    muteSearchNag();
+  }
+
+  /**
    * Puts the status message in the middle of the post div if an anchor is given,
    * otherwise horizontally centred over the post column and vertically in the middle.
    */
@@ -4278,8 +4617,8 @@
 
       // The lines sit in the gaps between two posts, so they are re-measured
       // with everything else that is placed against the list.
-      placeLastRead();
       placeDaySeparators();
+      updateDayPin(list);
 
       const empty = document.getElementById(EMPTY_ID);
       if (empty) anchor(empty, list, { top: 18, full: true, matchHeight: true });
@@ -4602,7 +4941,12 @@
     // they have simply scrolls. It is measured from the posts on show, which do
     // not change when a hidden batch arrives, so it cannot drift under Teams'
     // re-renders the way a total of the hidden posts did.
-    setRoomPad(Math.max(0, Math.round(box.clientHeight - shown) - 2));
+    // The pinned line borrows 20px at the end of the list in the bottom order,
+    // and that room is part of the scroll range. It is left out of both sums: a
+    // short tab keeps no scroll range, and the end of a long one is the end of
+    // the posts, not a strip of blank the clamp then pulls the reader off.
+    const inset = list.dataset.tppPinEdge === 'bottom' ? DAY_PIN_HEIGHT : 0;
+    setRoomPad(Math.max(0, Math.round(box.clientHeight - shown) - 2 - inset));
 
     // Only a scroll this script is allowed to answer is pulled back. A scan
     // that moved the scroll while Teams was paging a channel's history was read
@@ -4610,7 +4954,7 @@
     // batch: that is how a whole channel's history ended up loading into the
     // list. The pad alone is enough to keep the end of the tab honest.
     if (!moveScroll) return;
-    const limit = Math.max(0, last - box.clientHeight);
+    const limit = Math.max(0, last + inset - box.clientHeight);
     if (box.scrollTop > limit + 1) box.scrollTop = limit;
   }
 
@@ -4635,6 +4979,9 @@
    * ignored outright.
    */
   function onAnyScroll(event) {
+    // The Ctrl+F nudge is shown on the first scroll of a channel, and again
+    // after Teams re-renders it, so the check rides along with the scroll.
+    muteSearchNagSoon();
     const target = event.target;
     if (target !== window && target !== document && target !== document.documentElement) {
       if (!lastScrollBox || target !== lastScrollBox) return;
@@ -4701,6 +5048,10 @@
 
   function scanNow() {
     if (!ready) return;
+
+    // Teams' Ctrl+F nudge comes and goes with the page's own rendering, so
+    // every scan is a chance to take it down.
+    muteSearchNag();
 
     // The rail is read on every scan, wherever Teams is: a channel can have news
     // while a chat is open. paintChannelRail throttles itself to once a second.
@@ -4807,9 +5158,10 @@
         // drawing anything: everything of ours that is fixed to the window goes
         // at once rather than floating over that panel until the grace runs out.
         if (!postsTabSelected()) {
-          for (const id of [EMPTY_ID, CONFETTI_ID, TOAST_ID]) {
+          for (const id of [DAY_PIN_ID, EMPTY_ID, CONFETTI_ID, TOAST_ID]) {
             document.getElementById(id)?.remove();
           }
+          restorePinHost();
         }
         // Twenty seconds, not one: the bars are fixed to the window and do not
         // need the list to stay where they are, so a swap can last as long as it
@@ -4835,7 +5187,7 @@
       // work belongs on a list nobody is looking at, so the overlays come down
       // and this scan stops here until Posts is in front again.
       if (!postsPanelShown(list)) {
-        for (const id of [EMPTY_ID, CONFETTI_ID, TOAST_ID]) {
+        for (const id of [DAY_PIN_ID, EMPTY_ID, CONFETTI_ID, TOAST_ID]) {
           document.getElementById(id)?.remove();
         }
         return;
@@ -4896,9 +5248,6 @@
         settleTries = 0;
       }
 
-      // Nothing of ours sits above the first post any more; a list that still
-      // carries top padding from an older build has it given back.
-      clearTopInset(list);
       if (features.inboxZero) applyLeftInset(list);
       else clearLeftInset(list);
 
@@ -4923,15 +5272,26 @@
   /**
    * Closes up the posts Teams has just inserted, before the next paint.
    *
-   * A MutationObserver callback runs before the browser paints, so doing the one
-   * thing that matters here — giving a read post its id and its tucked mark —
-   * means a batch of older posts never appears at full height only to collapse a
-   * moment later. That flash is what made the list jump on first load, and again
-   * whenever hovering made Teams re-render a few rows. Everything else (cards,
-   * buttons, pins) still waits for the debounced scan.
+   * A MutationObserver callback runs before the browser lays the page out, so
+   * doing the work that decides a row's height here means a batch of older posts
+   * never appears at full height only to collapse a moment later. That flash is
+   * what made the list jump on first load, and again whenever hovering made Teams
+   * re-render a few rows.
+   *
+   * The card is part of that work, and it is the whole of it when compact posts
+   * are on without Inbox Zero: a row they are folded into is a quarter of the
+   * height Teams drew, so a row left at Teams' height until the debounced scan
+   * grew the list by a whole post and then gave it back. Teams keeps the posts
+   * under the reader still with a ResizeObserver that compensates for exactly
+   * that change (applyAnchoring), and in the bottom order — the end of the list,
+   * where every one of those changes lands on the reading edge — its correction
+   * is what the reader sees as the posts skipping. Folding here, before the row
+   * is ever laid out, leaves it nothing to compensate for. Everything else
+   * (buttons, day lines, pins, the Inbox walk) still waits for the scan.
    */
   function absorbNodes(nodes) {
-    if (!ready || !features || !features.inboxZero || channelMode !== true) return;
+    if (!ready || !features || channelMode !== true) return;
+    if (!features.inboxZero && !features.compactPosts) return;
     // The composer owns the page while it is open: nothing is marked there.
     if (composerOpen()) return;
 
@@ -4944,6 +5304,24 @@
     for (const node of nodes) {
       if (!node || node.nodeType !== 1) continue;
       if (node.closest('[data-tpp-ui], .tpp-tabs, .tpp-empty-state')) continue;
+
+      // Teams re-renders a row's contents more often than the row itself, and
+      // the card goes with them: the row is left folded with nothing to show,
+      // or (until its classes are read again) at Teams' full height. Putting the
+      // card back here, before the browser measures the row, is the difference
+      // between a post that keeps its place and one that moves the list.
+      if (features.compactPosts) {
+        const owner = node.parentElement && node.parentElement.closest('.tpp-post');
+        if (
+          owner &&
+          owner.dataset.tppId &&
+          !owner.classList.contains('tpp-unfold') &&
+          !owner.querySelector(':scope > [data-tpp-ui="preview"]') &&
+          !inTeamsPane(owner)
+        ) {
+          paintRow(owner);
+        }
+      }
 
       for (const row of newRows(node)) {
         if (row.dataset.tppModal === '1') continue;
@@ -4966,6 +5344,8 @@
         row.classList.add('tpp-post');
         setTag(row, isReadPost(id, timeOf(id, row)) ? 'read' : '');
         markTucked(row, id);
+        // The card now, not in 300ms: see the note above.
+        if (features.compactPosts) paintRow(row);
       }
     }
   }
@@ -5287,9 +5667,13 @@
     titleObserver?.disconnect();
     titleObserver = null;
     titleEl = null;
-    for (const id of [TABS_ID, EMPTY_ID, TOAST_ID, CONFETTI_ID]) {
+    for (const id of [TABS_ID, DAY_PIN_ID, EMPTY_ID, TOAST_ID, CONFETTI_ID]) {
       document.getElementById(id)?.remove();
     }
+    // Every list that ever carried the pinned line's room gives it back, and
+    // every header strip the line was drawn in gets its own position back.
+    dropDayPinInset();
+    restorePinHost();
 
     lastList = null;
     listRect = null;

@@ -875,12 +875,12 @@ html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-preview:hover .tpp-
   color: var(--tpp-purple-lilac);
 }
 
-html[data-tpp-compact-posts] .tpp-post.tpp-previewed .tpp-day-sep {
+html[data-tpp-compact-posts][data-tpp-day-lines] .tpp-post.tpp-previewed .tpp-day-sep {
   display: flex !important;
 }
 
 /* A line needs air: the post the line hangs beside gives back a band for it. */
-html[data-tpp-compact-posts] .tpp-post.tpp-day-row {
+html[data-tpp-compact-posts][data-tpp-day-lines] .tpp-post.tpp-day-row {
   padding-bottom: 26px !important;
 }
 

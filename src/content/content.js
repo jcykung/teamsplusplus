@@ -156,7 +156,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-07.1';
+  const BUILD = '2026-11-08.1';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -348,6 +348,15 @@
   /** The colour painted behind the list, sampled for the line to stand on. */
   let pinPaint = '';
   let pinPaintAt = 0;
+  /**
+   * Watches every post's box, so a day's line follows a post that changes
+   * height: a reply box opening inside a row holds the scan off, and an image
+   * or a thread arriving lands after the rows were read. The watched rows are
+   * kept here because Teams recycles them, and a row that has left the list is
+   * watched no longer.
+   */
+  let sizeObserver = null;
+  let sizeWatched = new Set();
   /** Whether a channel's UI has been drawn, so another view tears it down once. */
   let uiDrawn = false;
   /** When the scroll limit was last re-measured from the scroll handler. */
@@ -523,27 +532,44 @@
     if (open) focusPostMessage(row);
     // The post changed height, so anything placed against it is re-measured.
     reposition();
-    // The post is read from its first line, which is at the top of the list
-    // rather than wherever its card sat. The scroll waits for the frame after
-    // the click: the row has just grown and the post before it has closed.
-    if (open) {
-      requestAnimationFrame(() => {
-        const at = scrollPostToTop(row);
-        if (at === null) return;
-        window.setTimeout(() => {
-          // The click is handed on to Teams, which brings the message into view
-          // in its own time — after the frame above, sometimes. A post that has
-          // moved since is put back at the top; one that has not is left alone.
-          if (!row.isConnected || !unfolded.has(id)) return;
-          if (Math.abs(row.getBoundingClientRect().top - at) > 1) scrollPostToTop(row);
-        }, 150);
-      });
-    }
+    // Whichever way the post just changed, it belongs at the top of the list:
+    // opened, reading starts at its first line; folded, the condensed card
+    // comes back there rather than to wherever the pointer left it.
+    holdRowAtTop(row, open);
   }
 
   /**
-   * Brings an open post to the top of the list, so reading starts at its first
-   * line instead of wherever its card happened to be.
+   * Keeps a post at the top of the list after it has been opened or folded.
+   *
+   * The scroll waits for the frame after the click: the row has just grown or
+   * shrunk, and the post opened or closed before it has moved too. The click is
+   * handed on to Teams, which brings the message into view in its own time —
+   * after that frame, sometimes — so the row is asked for its place a second
+   * time; one that has not moved since is left alone.
+   *
+   * `open` is the state the post is meant to be in when the scroll is made: a
+   * post opened and folded again in the same beat is left where the reader put
+   * it.
+   */
+  function holdRowAtTop(row, open) {
+    const id = row && row.dataset.tppId;
+    if (!id) return;
+    const wanted = () => row.isConnected && unfolded.has(id) === open;
+    requestAnimationFrame(() => {
+      if (!wanted()) return;
+      const at = scrollRowToTop(row);
+      if (at === null) return;
+      window.setTimeout(() => {
+        if (!wanted()) return;
+        if (Math.abs(row.getBoundingClientRect().top - at) > 1) scrollRowToTop(row);
+      }, 150);
+    });
+  }
+
+  /**
+   * Brings a post's row to the top of the list — open or folded alike — so
+   * reading starts at its first line, or the condensed card sits at the top,
+   * instead of wherever it happened to be.
    *
    * Every box above the row that can scroll takes its turn, innermost first, and
    * each is measured after the one inside it has moved — moving an outer box
@@ -557,10 +583,8 @@
    * since. A post so near the end of a channel that a box cannot lift it that far
    * ends up as high as that box allows: there is nothing below it to scroll into.
    */
-  function scrollPostToTop(row) {
+  function scrollRowToTop(row) {
     if (!row || !row.isConnected) return null;
-    const id = row.dataset.tppId;
-    if (!id || !unfolded.has(id)) return null;
     for (let box = row.parentElement; box && box !== document.body; box = box.parentElement) {
       if (box.scrollHeight <= box.clientHeight + 1) continue;
       const overflow = getComputedStyle(box).overflowY;
@@ -736,6 +760,9 @@
     unfolded.delete(id);
     row.classList.remove('tpp-unfold');
     reposition();
+    // The condensed card goes back to the top of the list, where the post was
+    // opened, rather than staying at the line the keyboard had reached.
+    holdRowAtTop(row, false);
   }
 
   /** Marks a post's body so the compact view can clamp it. */
@@ -1707,6 +1734,57 @@
   }
 
   /**
+   * Watches the posts' boxes for a change of height.
+   *
+   * The day's lines hang in the gaps between posts, placed by measuring those
+   * gaps, and a post grows without the scan ever seeing it: a reply box opening
+   * inside a row grows the post while the composer holds the scan off, and an
+   * image or a thread arriving grows it after the rows were last read. A line
+   * measured against the height the post had a moment before sits over the post
+   * instead of in the gap after it, so the rows themselves are watched and the
+   * lines put back before the grown post can be seen. A line only ever moves;
+   * it takes no room, so writing it cannot resize the row and call this again.
+   */
+  function watchPostSizes(list) {
+    if (
+      !ready ||
+      channelMode !== true ||
+      !features ||
+      !features.compactPosts ||
+      !features.dayLines ||
+      !list
+    ) {
+      unwatchPostSizes();
+      return;
+    }
+
+    if (!sizeObserver) {
+      sizeObserver = new ResizeObserver(() => {
+        if (!ready || channelMode !== true) return;
+        if (!features || !features.compactPosts || !features.dayLines) return;
+        // Measured in the resize callback rather than on the next frame: it runs
+        // after layout and before paint, so the lines are already in the new gap
+        // when the grown post is first drawn.
+        placeDaySeparators();
+      });
+    }
+
+    const keep = new Set(list.querySelectorAll('.tpp-post'));
+    for (const row of sizeWatched) {
+      if (!keep.has(row) || !row.isConnected) sizeObserver.unobserve(row);
+    }
+    for (const row of keep) sizeObserver.observe(row);
+    sizeWatched = keep;
+  }
+
+  /** Stops watching the posts, for a view that no longer draws the lines. */
+  function unwatchPostSizes() {
+    sizeObserver?.disconnect();
+    sizeObserver = null;
+    sizeWatched = new Set();
+  }
+
+  /**
    * Puts a line in the middle of the gap beside the post it belongs to,
    * measuring from the visible edges of the two posts rather than from the boxes
    * around them, whose padding would pull the line off centre.
@@ -1809,6 +1887,7 @@
     const wanted =
       Boolean(features) &&
       features.compactPosts &&
+      features.dayLines &&
       !features.inboxZero &&
       ts > 0;
     if (!wanted) {
@@ -1873,7 +1952,7 @@
    * day in two or join two together.
    */
   function refreshDaySeparators() {
-    if (!features || !features.compactPosts) {
+    if (!features || !features.compactPosts || !features.dayLines) {
       for (const sep of document.querySelectorAll('[data-tpp-ui="day-sep"]')) sep.remove();
       for (const row of document.querySelectorAll('.tpp-day-row')) {
         row.classList.remove('tpp-day-row');
@@ -2096,7 +2175,7 @@
    * doubled.
    */
   function updateDayPin(list) {
-    if (!features || !features.compactPosts || features.inboxZero) {
+    if (!features || !features.compactPosts || !features.dayLines || features.inboxZero) {
       hideDayPin();
       dropDayPinInset();
       return;
@@ -3201,14 +3280,19 @@
     // only from a scan: the walk that follows measures every gap against it,
     // and a scroll frame that rewrote the list's height would move the posts
     // under the reader.
-    if (features && features.compactPosts && !features.inboxZero) {
+    if (features && features.compactPosts && features.dayLines && !features.inboxZero) {
       // The header strip takes the line without the list giving up any room; the
       // inset is only for a pane where the line has to sit over the posts.
       if (pinHostFor(list)) dropDayPinInset();
       else applyDayPinInset(list, postsNewestFirst(list));
+    } else if (list.dataset.tppPinEdge !== undefined) {
+      // The date lines are off (or the view that drew them is): the room they
+      // borrowed at the edge goes back with them.
+      dropDayPinInset();
     }
     refreshDaySeparators();
     placeDaySeparators();
+    watchPostSizes(list);
     updateDayPin(lastList);
     applyViewFiltering();
   }
@@ -5533,6 +5617,15 @@
       }
     }
 
+    if (!features.dayLines) {
+      // The date lines come off, with the band the drawn ones were given and
+      // the room the held one borrowed at the edge.
+      for (const el of document.querySelectorAll('[data-tpp-ui="day-sep"]')) el.remove();
+      for (const el of document.querySelectorAll('.tpp-day-row')) el.classList.remove('tpp-day-row');
+      hideDayPin();
+      dropDayPinInset();
+    }
+
     for (const el of document.querySelectorAll('[data-tpp-placeholder]')) {
       delete el.dataset.tppPlaceholder;
     }
@@ -5659,6 +5752,7 @@
    */
   function teardownChannelUi() {
     uiDrawn = false;
+    unwatchPostSizes();
     cascadeKeyCache = '';
     perf.loadStartedAt = 0;
     settleTries = 0;

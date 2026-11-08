@@ -55,6 +55,13 @@
       default: true
     },
     {
+      id: 'dayLines',
+      attr: 'data-tpp-day-lines',
+      label: 'Date lines',
+      hint: "Prints the date between one day's posts and the next, and holds the day at the edge you are reading from. Turn it off for one unbroken run of cards.",
+      default: true
+    },
+    {
       id: 'manualRead',
       attr: 'data-tpp-manual-read',
       label: 'Manually mark as read',

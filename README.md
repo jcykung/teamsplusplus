@@ -45,8 +45,9 @@ own keyboard shortcuts act on, so they work straight away rather than after a
 second click; clicking the open post folds it back, and **Escape** does too.
 Only one post is open at a time — opening another closes the one before it, and
 the post that opens is scrolled up to the top of the list so it reads from its
-first line. Selecting a post's text — dragging over it, or double-clicking a
-word — leaves the post open so the words can be copied. A channel that showed
+first line; closing it again brings the condensed card back to the top too.
+Selecting a post's text — dragging over it, or double-clicking a word — leaves
+the post open so the words can be copied. A channel that showed
 two posts now shows a dozen, which is the usual complaint about Teams' post
 list.
 
@@ -107,9 +108,9 @@ arrives after the mark is newer than it and says **Unread** as usual, and one yo
 have read here comes back if it has moved on since (a reply, a reaction, an
 attachment or an edit).
 
-The Compact posts switch lives in the popup, and its setting is stored in
-`chrome.storage.sync`, so it follows the user to every Chrome profile signed in
-with the same account.
+The Compact posts and Date lines switches live in the popup, and their settings
+are stored in `chrome.storage.sync`, so they follow the user to every Chrome
+profile signed in with the same account.
 
 ## Privacy and security
 

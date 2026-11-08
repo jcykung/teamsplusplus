@@ -294,13 +294,36 @@
       <div class="subtitle">What's new and improved in Teams++</div>
 
       <ul class="timeline">
-        <!-- v1.0.6 -->
+        <!-- v1.0.7 -->
         <li class="timeline-item latest">
+          <div class="timeline-marker"></div>
+          <div class="timeline-header">
+            <h2 class="version-title">v1.0.7</h2>
+            <span class="version-date">November 2026</span>
+            <span class="badge badge-latest">Current</span>
+          </div>
+          <ul class="change-list">
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>The date belongs to the post you are reading:</strong> scrolling through one long open post walked the held date through the days of the posts further down the channel — Tuesday, October 20, then September 21, then August 31 — naming posts that were nowhere near the reader, over the one that had not moved. The date is now only ever the day of the post under the edge: that post's own line when the line has reached the edge, and otherwise the day that post belongs to. A line belonging to any other post is not consulted, so scrolling inside a post cannot change what it says.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>The list order is read from the whole channel, not its two ends:</strong> Teams positions and recycles these rows itself, so a single row holding the stamp of the post it showed before — or one waiting below the fold — was enough to turn the list round. That drew every day's line on the wrong side of its gap and moved the held date to the far edge, where it named the days arriving there instead of the day being read. The order is now read from the posts where they are drawn, one neighbour against the next, and the majority decides; the day's lines are drawn again the moment it changes.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>A post keeps the day its newest reply gave it:</strong> Teams re-renders a row as it is scrolled into view, and can leave the reply out for a moment, which made the post fall back to the day it was written — moving the post, and every date line under it, while the reader was in the middle of it. The newest activity a post has shown is now remembered, so its day does not slip back to an older one.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>Two switches, and they work apart:</strong> Compact posts and Date lines are now independent — the day's lines can be kept with Teams' own posts as well as with the cards. The <strong>Manually mark as read</strong> switch is gone, because the rule it guarded is now the only one: a card keeps its <strong>Unread</strong> badge until you open it, and Teams clearing its own badge behind the scenes does not count as reading it.
+            </li>
+          </ul>
+        </li>
+
+        <!-- v1.0.6 -->
+        <li class="timeline-item">
           <div class="timeline-marker"></div>
           <div class="timeline-header">
             <h2 class="version-title">v1.0.6</h2>
             <span class="version-date">November 2026</span>
-            <span class="badge badge-latest">Current</span>
           </div>
           <ul class="change-list">
             <li class="change-item">

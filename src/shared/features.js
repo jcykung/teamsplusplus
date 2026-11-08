@@ -17,10 +17,9 @@
  *                           (only read posts shown)
  *   teamsPlusPlus.newPosts  post id -> { n: 1 } while the compact card is
  *                           unread, or { f } with the fingerprint captured when
- *                           it was read and `t`, when that read happened. While
- *                           the "Manually mark as read" switch is on, the only
- *                           thing that marks a post read in the compact view is
- *                           opening its card.
+ *                           it was read and `t`, when that read happened. The
+ *                           only thing that marks a post read in the compact
+ *                           view is opening its card.
  */
 (function (root) {
   'use strict';
@@ -58,14 +57,7 @@
       id: 'dayLines',
       attr: 'data-tpp-day-lines',
       label: 'Date lines',
-      hint: "Prints the date between one day's posts and the next, and holds the day at the edge you are reading from. Turn it off for one unbroken run of cards.",
-      default: true
-    },
-    {
-      id: 'manualRead',
-      attr: 'data-tpp-manual-read',
-      label: 'Manually mark as read',
-      hint: "A post keeps its Unread badge and purple border until you open its card: Teams clearing its own badge when the channel opens does not count as reading it. Marking a post unread brings it back straight away, and only for that post. Turn it off to follow Teams instead.",
+      hint: "Prints the date between one day's posts and the next, and holds the day at the edge you are reading from. Works with compact cards on or off; turn it off for one unbroken run of posts.",
       default: true
     },
     {

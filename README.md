@@ -71,7 +71,8 @@ naming the day at the edge you are reading from — the top of the list, or the
 bottom when new posts arrive there — and moves on when that day's line arrives.
 It stands on the colour behind it, so the posts scrolling under it cannot be
 read through it; where the pane leaves an empty strip above the list, the date
-is drawn there instead.
+is drawn there instead. The line is drawn whether the posts are compact cards or
+Teams' own, so the two switches work apart from each other.
 
 A post answered today sits in today's run. The line follows the newest activity
 Teams prints on the row — the post's own time, or a newer reply's — so a post
@@ -83,14 +84,6 @@ purple border go the moment the card is opened, and nothing else clears them,
 because Teams' idea of read is not the one this view follows. A post that has
 moved on since you read it — a reply, a reaction, a new attachment or an edit —
 wears the mark again.
-
-### Manually mark as read
-
-On by default. A post keeps its **Unread** badge and purple border until you
-open its card — Teams clearing its own badge when the channel opens does not
-count as reading it — so a channel says at a glance what has arrived. Turn the
-switch off and the cards follow Teams instead: the mark shows while Teams marks
-the post new and clears when Teams marks it read.
 
 Changing channel folds whatever was open. A channel is always entered as a list of
 cards, the way it looked before any of them was opened, so a post you were

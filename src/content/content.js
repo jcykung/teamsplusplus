@@ -156,7 +156,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-08.1';
+  const BUILD = '2026-11-08.6';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -265,6 +265,18 @@
 
   /** id -> { row, id, text, author, read, ts } for the latest scan. */
   let rowsById = new Map();
+  /**
+   * id -> the newest activity that post has shown, in ms (see activityStampOf).
+   *
+   * A post is filed under the day of its newest activity, and that is read from
+   * whatever Teams has rendered in the row — a post answered today carries its
+   * reply's stamp. Teams re-renders a row as it is scrolled into view, and a
+   * re-render can leave the reply out for a moment: the post then falls back to
+   * the day it was written, which moves it, and every date line below it, while
+   * the reader is in the post. A post does not get older, so the newest stamp
+   * seen for an id is kept until a newer one arrives.
+   */
+  const activityNewest = new Map();
   /** The names of the channel those rows were read from: see settleRailUnread. */
   let rowsKeys = [];
 
@@ -348,6 +360,12 @@
   /** The colour painted behind the list, sampled for the line to stand on. */
   let pinPaint = '';
   let pinPaintAt = 0;
+  /**
+   * Set when the list's order was read the other way round: every day's line
+   * says the other side of its gap until they are drawn again, so the next
+   * frame repaints them (see postsNewestFirst and reposition).
+   */
+  let dayLinesStale = false;
   /**
    * Watches every post's box, so a day's line follows a post that changes
    * height: a reply box opening inside a row holds the scan off, and an image
@@ -460,7 +478,7 @@
    */
   function onUnreadMenuPress(event) {
     if (!ready || !channelMode || !features || !features.compactPosts) return;
-    if (!features.manualRead || features.inboxZero) return;
+    if (features.inboxZero) return;
     const target = event.target;
     if (!target || target.nodeType !== 1) return;
     const row = target.closest('.tpp-post');
@@ -1062,10 +1080,6 @@
    */
   function refreshNewPost(id, row, ts, base) {
     if (!id || !features || !features.compactPosts || features.inboxZero) return false;
-    // With the switch off this view follows Teams: the badge and border show
-    // while Teams marks the post new and clear when Teams marks it read, and
-    // nothing is written down.
-    if (!features.manualRead) return isUnreadPost(row);
     const record = newState[id];
     if (record && record.n === 1) return true;
     if (!isUnreadPost(row)) return false;
@@ -1146,9 +1160,6 @@
   function markPostOpened(row) {
     const id = row && row.dataset.tppId;
     if (!id || !features || !features.compactPosts || features.inboxZero) return;
-    // Nothing is marked read by hand while the switch is off: Teams' badge is
-    // the only marker then, and opening a card must not hide it.
-    if (!features.manualRead) return;
     const fingerprint = activityOf(row);
     // Opening the card is the whole decision. The fingerprint is kept so Teams'
     // badge — left in the row, or drawn again on the next render — cannot bring
@@ -1231,7 +1242,6 @@
   function markPostUnread(row) {
     const id = row && row.dataset.tppId;
     if (!id || !features || !features.compactPosts || features.inboxZero) return;
-    if (!features.manualRead) return;
     // The press and the click that follows it are one action, so only the first
     // writes the mark: the second would take the snapshot after Teams had
     // already badged the posts below.
@@ -1746,14 +1756,7 @@
    * it takes no room, so writing it cannot resize the row and call this again.
    */
   function watchPostSizes(list) {
-    if (
-      !ready ||
-      channelMode !== true ||
-      !features ||
-      !features.compactPosts ||
-      !features.dayLines ||
-      !list
-    ) {
+    if (!ready || channelMode !== true || !features || !features.dayLines || !list) {
       unwatchPostSizes();
       return;
     }
@@ -1761,7 +1764,7 @@
     if (!sizeObserver) {
       sizeObserver = new ResizeObserver(() => {
         if (!ready || channelMode !== true) return;
-        if (!features || !features.compactPosts || !features.dayLines) return;
+        if (!features || !features.dayLines) return;
         // Measured in the resize callback rather than on the next frame: it runs
         // after layout and before paint, so the lines are already in the new gap
         // when the grown post is first drawn.
@@ -1789,7 +1792,7 @@
    * measuring from the visible edges of the two posts rather than from the boxes
    * around them, whose padding would pull the line off centre.
    *
-   * `band` is the row class that gives the line a band of its own: an open row
+   * `band` is the row class that gives the line a band of its own: a row
    * measured to its padded bottom would put the gap above the line and drop the
    * line onto the post below.
    */
@@ -1798,17 +1801,20 @@
     if (!row) return;
 
     // The box the user sees: the card while the post is folded, the post itself
-    // once it is open.
+    // once it is open — and always the row when compact posts are off, where the
+    // card is still in the row but `display: none` and has no box to measure.
     const card = row.querySelector(':scope > [data-tpp-ui="preview"]');
     const open = row.classList.contains('tpp-unfold');
-    const shown = card && !open ? card : row;
+    const shown = card && !open && card.getClientRects().length ? card : row;
     const rowRect = row.getBoundingClientRect();
     const box = shown.getBoundingClientRect();
     if (!box.height) return;
 
-    // The band under the post belongs to the line, not to the post.
+    // The band under the post belongs to the line, not to the post — but only
+    // when the row itself is what was measured: the card ends above the band.
     const banded = row.classList.contains(band);
-    const padding = open && banded ? parseFloat(getComputedStyle(row).paddingBottom) || 0 : 0;
+    const padding =
+      shown === row && banded ? parseFloat(getComputedStyle(row).paddingBottom) || 0 : 0;
     const bottom = box.bottom - padding;
 
     let next = row.nextElementSibling;
@@ -1822,7 +1828,9 @@
         // padding above the card, and measuring that would pull the line up.
         const nextCard = post.querySelector('[data-tpp-ui="preview"]');
         const nextShown =
-          nextCard && !post.classList.contains('tpp-unfold') ? nextCard : post;
+          nextCard && !post.classList.contains('tpp-unfold') && nextCard.getClientRects().length
+            ? nextCard
+            : post;
         nextBox = nextShown.getBoundingClientRect();
         break;
       }
@@ -1884,12 +1892,7 @@
   function paintDaySeparator(row, ts) {
     let sep = row.querySelector(':scope > [data-tpp-ui="day-sep"]');
     // Inbox Zero replaces the read markers with its own tabs.
-    const wanted =
-      Boolean(features) &&
-      features.compactPosts &&
-      features.dayLines &&
-      !features.inboxZero &&
-      ts > 0;
+    const wanted = Boolean(features) && features.dayLines && !features.inboxZero && ts > 0;
     if (!wanted) {
       sep?.remove();
       row.classList.remove('tpp-day-row');
@@ -1923,18 +1926,51 @@
     const scope = list || (lastList && lastList.isConnected ? lastList : null);
     if (!scope) return true;
     // The answer is kept on the list rather than read again on every frame. A
-    // row Teams is re-drawing loses its stamp for a moment, and reading the two
-    // ends then said "newest first" — which turned the day's lines and the
-    // pinned edge round for a frame and moved the posts under the reader. Only
-    // a clear reading of both ends moves it.
-    const rows = scope.querySelectorAll('.tpp-post');
-    if (rows.length >= 2) {
-      const first = Number(rows[0].dataset.tppTs) || 0;
-      const last = Number(rows[rows.length - 1].dataset.tppTs) || 0;
-      if (first && last && first !== last) {
-        const order = first > last ? '1' : '0';
-        if (scope.dataset.tppNewestFirst !== order) scope.dataset.tppNewestFirst = order;
+    // row Teams is re-drawing loses its stamp for a moment, and a reading taken
+    // then would turn the day's lines and the pinned edge round for a frame and
+    // move the posts under the reader.
+    //
+    // The order is taken from the posts in the order they are drawn, by
+    // position, not from the first and last rows in the markup: Teams positions
+    // these rows itself and recycles the nodes, so a row can sit anywhere in the
+    // list whatever its place on screen.
+    const rows = [];
+    for (const row of scope.querySelectorAll('.tpp-post')) {
+      const ts = Number(row.dataset.tppTs) || 0;
+      if (!ts) continue;
+      const box = row.getBoundingClientRect();
+      if (box.height <= 0) continue;
+      rows.push({ top: box.top, ts });
+    }
+
+    // Asked of every neighbouring pair, not of the two ends. One row can carry a
+    // stamp from the post it held before, or be drawn away from its place, or
+    // sit below the fold with a newer stamp than the whole visible run — and
+    // comparing the ends let any one of those turn the whole list round: the
+    // day's lines then named the other side of every gap, and the pinned date
+    // moved to the far edge and named a different, older day each time a long
+    // post was scrolled. A pair from the same day says nothing either way, so
+    // only pairs more than a day apart are counted, and the majority decides.
+    if (rows.length > 1) {
+      rows.sort((a, b) => a.top - b.top);
+      let down = 0;
+      let up = 0;
+      for (let i = 1; i < rows.length; i += 1) {
+        const step = rows[i].ts - rows[i - 1].ts;
+        if (Math.abs(step) <= 86400000) continue;
+        if (step < 0) down += 1;
+        else up += 1;
       }
+      // A split vote is not an answer: the order stays as it was read last.
+      const order = down === up ? '' : down > up ? '1' : '0';
+      if (order && scope.dataset.tppNewestFirst !== order) {
+        scope.dataset.tppNewestFirst = order;
+        dayLinesStale = true;
+      }
+      // The evidence, for a console report: rows read, then how many pairs
+      // said newest-first and how many said newest-last.
+      const seen = `${rows.length}:${down}/${up}`;
+      if (scope.dataset.tppOrder !== seen) scope.dataset.tppOrder = seen;
     }
     return scope.dataset.tppNewestFirst !== '0';
   }
@@ -1952,7 +1988,7 @@
    * day in two or join two together.
    */
   function refreshDaySeparators() {
-    if (!features || !features.compactPosts || !features.dayLines) {
+    if (!features || !features.dayLines) {
       for (const sep of document.querySelectorAll('[data-tpp-ui="day-sep"]')) sep.remove();
       for (const row of document.querySelectorAll('.tpp-day-row')) {
         row.classList.remove('tpp-day-row');
@@ -2104,7 +2140,7 @@
     const now = performance.now();
     if (pinPaint && now - pinPaintAt < 500) return pinPaint;
     pinPaintAt = now;
-    const card = row ? row.querySelector('.tpp-preview') : null;
+    const card = row && features && features.compactPosts ? row.querySelector('.tpp-preview') : null;
     pinPaint = paintBehind(card || row || port) || pinPaint;
     return pinPaint;
   }
@@ -2175,7 +2211,7 @@
    * doubled.
    */
   function updateDayPin(list) {
-    if (!features || !features.compactPosts || !features.dayLines || features.inboxZero) {
+    if (!features || !features.dayLines || features.inboxZero) {
       hideDayPin();
       dropDayPinInset();
       return;
@@ -2281,30 +2317,44 @@
   /**
    * The date at the edge being read from.
    *
-   * A drawn line that has reached the edge speaks first: its label is the day on
-   * the far side of it, and it arrives a moment before that day's first post
-   * does — using the post alone made the held line hand over late, with a day's
-   * posts already under a pin still naming the day before. With no line at the
-   * edge, the day is the one the post there belongs to.
+   * Only the post at the edge speaks for it. Its own drawn line speaks first
+   * when that has reached the edge: the label is the day on the far side of it,
+   * and it arrives a moment before that day's first post does — using the post
+   * alone made the held line hand over late, with a day's posts already under a
+   * pin still naming the day before. With no line of its own at the edge, the
+   * day is the one that post belongs to.
+   *
+   * A line belonging to any other post is never consulted, however close to the
+   * edge it measures. A post several screens long is the only post at the edge
+   * for a long stretch of scrolling, and while it was open the pin walked
+   * through the days of the posts further down the channel — Tuesday, October
+   * 20, then September 21, then August 31 — naming posts that were nowhere near
+   * the reader, over the one that had not moved. The line of a recycled row (a
+   * box at the top of the page, or behind the list) was one way in; any line
+   * that happens to sit near the edge while a long post is open is another.
+   * Reading only the post at the edge makes the date a property of what is
+   * under the line, so scrolling inside a post cannot change it.
    */
   function dayAtEdge(list, rect, newestFirst, row) {
     const edge = newestFirst ? rect.top : rect.bottom;
-    let best = null;
-    for (const sep of list.querySelectorAll('.tpp-day-sep')) {
+    // No post at the edge means nothing is known: the pin steps aside and the
+    // drawn line, wherever it is, says the date.
+    if (!row) return '';
+
+    const banded = newestFirst
+      ? (box) => box.top <= edge + 1 && box.bottom >= edge - DAY_PIN_HEIGHT
+      : (box) => box.bottom >= edge - 1 && box.top <= edge + DAY_PIN_HEIGHT;
+
+    for (const sep of row.querySelectorAll('.tpp-day-sep')) {
+      if (sep.closest('.tpp-post') !== row) continue;
       const label = sep.querySelector('.tpp-day-label')?.textContent || '';
       if (!label) continue;
       const box = sep.getBoundingClientRect();
-      if (newestFirst) {
-        if (box.top <= edge + 1 && (!best || box.top > best.top)) {
-          best = { top: box.top, label };
-        }
-      } else if (box.bottom >= edge - 1 && (!best || box.bottom < best.bottom)) {
-        best = { bottom: box.bottom, label };
-      }
+      if (box.height <= 0 || !banded(box)) continue;
+      return label;
     }
-    if (best) return best.label;
 
-    return row ? dayLabelOf(activityStampOf(row)) : '';
+    return dayLabelOf(activityStampOf(row));
   }
 
   /** The post at the edge of the scroll box, or the nearest one within a line. */
@@ -3280,7 +3330,7 @@
     // only from a scan: the walk that follows measures every gap against it,
     // and a scroll frame that rewrote the list's height would move the posts
     // under the reader.
-    if (features && features.compactPosts && features.dayLines && !features.inboxZero) {
+    if (features && features.dayLines && !features.inboxZero) {
       // The header strip takes the line without the list giving up any room; the
       // inset is only for a pane where the line has to sit over the posts.
       if (pinHostFor(list)) dropDayPinInset();
@@ -3309,7 +3359,10 @@
    *
    * Asking is not free — a row can hold a whole thread — so the answer is kept on
    * the row until the post or its reply count changes, which is what a new reply
-   * does.
+   * does. The newest answer is also kept by post id, because a re-render that has
+   * not drawn the reply yet reads as an older post: the row's day would fall back
+   * to the day it was written, and the line above it would name that day while
+   * the post is still the one being read.
    */
   function activityStampOf(row) {
     if (!row) return 0;
@@ -3344,9 +3397,31 @@
       // Nothing readable in the row: the post's own stamp stands.
     }
 
+    // A post does not get older. The row's own reading is a snapshot of what
+    // Teams had rendered a moment ago, and it is only trusted upwards.
+    const id = row.dataset.tppId || '';
+    const kept = id ? Number(activityNewest.get(id)) || 0 : 0;
+    if (kept > latest) latest = kept;
+    else if (id && latest > kept) keepActivity(id, latest);
+
     row.dataset.tppActOf = seen;
     row.dataset.tppActAt = String(latest || 0);
     return latest;
+  }
+
+  /**
+   * Remembers the newest activity seen for a post.
+   *
+   * Kept for the session rather than on the row: Teams replaces a row's node as
+   * often as it re-renders it, and the point of the memory is to outlast that.
+   * Only the newest few hundred are kept — a post scrolled out of the list and
+   * back is read again anyway, and the reading there is a fresh one.
+   */
+  function keepActivity(id, ts) {
+    if (!id || !(ts > 0)) return;
+    activityNewest.delete(id);
+    activityNewest.set(id, ts);
+    if (activityNewest.size > 600) activityNewest.delete(activityNewest.keys().next().value);
   }
 
   /** When Teams stamped a post, in ms, or 0 when it prints nothing readable. */
@@ -4701,6 +4776,12 @@
 
       // The lines sit in the gaps between two posts, so they are re-measured
       // with everything else that is placed against the list.
+      // The order was read the other way round a moment ago: the day's lines
+      // were painted against the wrong side of their gaps and are drawn again.
+      if (dayLinesStale) {
+        dayLinesStale = false;
+        refreshDaySeparators();
+      }
       placeDaySeparators();
       updateDayPin(list);
 

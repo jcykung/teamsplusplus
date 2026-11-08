@@ -1,6 +1,6 @@
 # Chrome Web Store submission pack — Teams++
 
-Everything needed to submit v1.0.6 of Teams++: copy for the listing, answers for
+Everything needed to submit v1.0.7 of Teams++: copy for the listing, answers for
 every question in the item form, and the checks a reviewer is likely to make.
 
 The extension collects no data and makes no network requests, which makes the
@@ -10,7 +10,7 @@ privacy section simple to answer honestly: **no collection, no transmission.**
 
 ## 1. Before you submit
 
-- [ ] `manifest.json` version is the version you are uploading (`1.0.6`).
+- [ ] `manifest.json` version is the version you are uploading (`1.0.7`).
 - [ ] The zip contains `manifest.json` at its **root** (not inside a folder).
 - [ ] The zip contains no development files: `.git/`, `.freebuff/`, `*.md`,
       `icons/teamsplusplus*.png`.
@@ -55,9 +55,12 @@ press Escape to fold it. A channel that showed two posts now shows a dozen.
 
 The card carries the read state too. A post that has arrived, or one answered
 since you last read it, wears an Unread badge and a purple border until you open
-the card. A post you mark unread yourself comes back as Unread straight away. Opening a card is what marks it read — nothing is marked read behind your
-back. You can turn that rule off in the popup and follow Teams' own read state
-instead.
+the card. A post you mark unread yourself comes back as Unread straight away.
+Opening a card is what marks it read — nothing is marked read behind your back.
+
+The popup has two switches, Compact posts and Date lines. The cards print the
+date in the gaps between one day's posts and the next, hold the date of the day
+you are reading at the edge you read from, and both can be turned off.
 
 Teams++ only runs in a channel's Posts area on the Teams web app. Chats,
 Calendar, Files, Calls and the rest of Teams are left exactly as Teams draws
@@ -73,6 +76,24 @@ chrome://extensions.
 Teams++ is an independent project. It is not affiliated with, endorsed by, or
 sponsored by Microsoft, and Microsoft Teams is a trademark of Microsoft
 Corporation.
+```
+
+### What's new in this version (paste into the item form)
+
+```
+Date lines now belong to the post you are reading. Scrolling through one long
+open post used to walk the held date through the days of the posts further down
+the channel; the date is now the day of the post under the edge, and it hands
+over only when that post's own next day arrives.
+
+The order of a channel is read from the whole run of posts rather than its two
+ends, so the day's lines land on the right side of every gap and the date holds
+at the edge you read from. A post also keeps the day its newest reply gave it
+while Teams re-renders the row.
+
+Compact posts and Date lines are now two independent switches, and the date
+lines can be kept with Teams' own posts as well as with the cards. The Manually
+mark as read switch is gone: a card keeps its Unread badge until you open it.
 ```
 
 ---
@@ -249,8 +270,9 @@ avatars or message text in anything you would not publish; use a test channel.
    again (or press Escape) to fold it. Opening is what marks it read.
 5. Use Teams' own **Mark as unread** on a post: its card comes back as UNREAD
    with a purple border. Open the card: the mark clears.
-6. Open the popup: switches for Compact posts and Manually mark as read. Toggling
-   them changes the page behaviour; settings survive a reload and sync.
+6. Open the popup: two switches, Compact posts and Date lines. Each works on its
+   own — date lines can be left on with compact posts off. Toggling them changes
+   the page behaviour; settings survive a reload and sync.
 7. Revoke site access in `chrome://extensions` → Site access → remove Teams. The
    content script is unregistered and Teams renders untouched.
 8. Watch the DevTools Network panel while using the extension: there are no
@@ -260,9 +282,12 @@ avatars or message text in anything you would not publish; use a test channel.
 
 ## 10. Release checklist for this version
 
-- `manifest.json` → `1.0.6`
+- `manifest.json` → `1.0.7`
 - `background.js` → `CONTENT_VERSION` bumped so open Teams tabs pick up the new
   content script after an extension reload
-- `changelog.html` → v1.0.6 entry marked Current, v1.0.5 demoted
+- `changelog.html` → v1.0.7 entry marked Current, v1.0.6 demoted
+- `src/popup/popup.html` → footer version (the popup also reads the version from
+  the manifest on load, so this is only what is there before it runs)
+- The "What's new in this version" text in §2 pasted into the item form
 - `README.md` → read/unread rules and privacy sections current
 - `PRIVACY.md` → published and linked

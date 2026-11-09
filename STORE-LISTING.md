@@ -48,34 +48,17 @@ zip -r teamsplusplus.zip . \
 ```
 Teams++ makes Microsoft Teams channels readable.
 
-Every post in a channel becomes a compact card: the author's picture, their name
-and the time, the post's opening line as a headline, and the first two lines of
-the text. Click a card to open the whole post, replies and all; click it again or
-press Escape to fold it. A channel that showed two posts now shows a dozen.
+Every post in a channel becomes a compact card: the author's picture, their name and the time, the post's opening line as a headline, and the first two lines of the text. Click a card to open the whole post, replies and all; click it again or press Escape to fold it.
 
-The card carries the read state too. A post that has arrived, or one answered
-since you last read it, wears an Unread badge and a purple border until you open
-the card. A post you mark unread yourself comes back as Unread straight away.
-Opening a card is what marks it read — nothing is marked read behind your back.
+The card carries the read state too. A post that has arrived, or one answered since you last read it, wears an Unread badge and a purple border until you open the card. Opening a card is what marks it read — nothing is marked read behind your back. Never miss a new message again!
 
-The popup has two switches, Compact posts and Date lines. The cards print the
-date in the gaps between one day's posts and the next, hold the date of the day
-you are reading at the edge you read from, and both can be turned off.
+The popup has two switches, Compact posts and Date lines. The cards print the date in the gaps between one day's posts and the next, hold the date of the day you are reading at the edge you read from, and both can be turned off.
 
-Teams++ only runs in a channel's Posts area on the Teams web app. Chats,
-Calendar, Files, Calls and the rest of Teams are left exactly as Teams draws
-them.
+Teams++ only runs in a channel's Posts area on the Teams web app. Chats, Calendar, Files, Calls and the rest of Teams are left exactly as Teams draws them.
 
-PRIVACY: Teams++ collects nothing. It makes no network requests, has no
-analytics and no remote code. Post text is read from the page on your screen to
-draw the cards and is never stored or sent. Its settings and read marks live in
-your own Chrome storage. Access to Microsoft Teams is optional: nothing runs
-until you click Enable, and you can revoke it at any time from
-chrome://extensions.
+PRIVACY: Teams++ collects nothing. It makes no network requests, has no analytics and no remote code. Post text is read from the page on your screen to draw the cards and is never stored or sent. Its settings and read marks live in your own Chrome storage. Access to Microsoft Teams is optional: nothing runs until you click Enable, and you can revoke it at any time from chrome://extensions.
 
-Teams++ is an independent project. It is not affiliated with, endorsed by, or
-sponsored by Microsoft, and Microsoft Teams is a trademark of Microsoft
-Corporation.
+Teams++ is an independent project. It is not affiliated with, endorsed by, or sponsored by Microsoft, and Microsoft Teams is a trademark of Microsoft Corporation.
 ```
 
 ### What's new in this version (paste into the item form)

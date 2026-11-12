@@ -44,8 +44,33 @@
    * channel's history costs nothing.
    */
   const READ_LIMIT = 240;
-  /** How many compact-view marks are kept before the oldest are dropped. */
-  const NEW_POST_LIMIT = 300;
+  /**
+   * How many compact-view marks are kept before the oldest are dropped.
+   *
+   * The map has to fit in the 8 KB chrome.storage.sync allows in one item, and
+   * at 300 it did not: the write failed and the retry cut it to a quarter, so
+   * read marks vanished and those posts came back as unread a scan later. This
+   * is the count; how much of it fits also depends on the marks themselves, so
+   * persistNew cuts by size too (see fitNewState).
+   */
+  const NEW_POST_LIMIT = 100;
+
+  /**
+   * What is left for the marks in that 8 KB item, in characters of JSON.
+   *
+   * The room is spent here rather than guessed at: the map is cut to what fits,
+   * not to a count that happens to fit today.
+   */
+  const SYNC_ITEM_BUDGET = 7000;
+
+  /**
+   * How long after a card is opened its post cannot be re-marked, in ms.
+   *
+   * The reply and reaction counts are read out of a row Teams is still drawing,
+   * and a number that appears a moment after the open is not a reply since the
+   * read. A post that really has moved on is caught by the scan after this.
+   */
+  const OPEN_SETTLE_MS = 4000;
   /**
    * The key the build before this one kept the user's own pins under, each with
    * a copy of the post's words. Pinning is Teams' own now, so it is removed.
@@ -59,13 +84,11 @@
   const ACTIVITY_KEY = 'teamsPlusPlus.activity';
   const ACTIVITY_LIMIT = 300;
   /**
-   * The newest post each channel had when a post in it was marked unread, in
-   * local storage. A badge on anything stamped at or before that moment was
-   * already in the list when the user made the mark, so it is Teams' cascade and
-   * not news. One number per channel, so it costs almost nothing to keep.
+   * The per-channel baseline an earlier build kept for Teams' unread cascade,
+   * in local storage. The view follows Teams' badge now, so nothing reads it;
+   * it is removed at bootstrap rather than left spending the quota.
    */
-  const CASCADE_BASE_KEY = 'teamsPlusPlus.cascadeBase';
-  const CASCADE_BASE_LIMIT = 60;
+  const LEGACY_CASCADE_KEY = 'teamsPlusPlus.cascadeBase';
   /**
    * Channels whose unread dot is latched, in local storage: name -> 1.
    *
@@ -78,21 +101,6 @@
    */
   const RAIL_UNREAD_KEY = 'teamsPlusPlus.railUnread';
   const RAIL_UNREAD_LIMIT = 200;
-  /**
-   * How long a manual-unread snapshot is trusted, in ms. Teams badges the newer
-   * posts as the menu closes, so a couple of minutes covers a slow render and
-   * still lets the snapshot go.
-   */
-  const CASCADE_GUARD_MS = 120000;
-  /**
-   * How long after a post is read by opening its card a Teams badge on it is
-   * still the one Teams draws again as it re-renders the row. Past this, a
-   * badge on the post being read was put there by hand: Teams' own "Mark as
-   * unread".
-   */
-  const REOPEN_GRACE_MS = 1200;
-  /** How long after a press a Teams badge still counts as Teams' answer to it. */
-  const BADGE_AFTER_PRESS_MS = 4000;
   /**
    * How long a click on an open post is held before it folds it, in ms.
    *
@@ -156,7 +164,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-08.6';
+  const BUILD = '2026-11-11.4';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -210,26 +218,20 @@
    */
   let readState = {};
   /**
-   * id -> { n: 1 } while the compact card is new, or { f } with the activity
-   * fingerprint taken when the card was opened. Teams' New badge is only the
-   * arrival signal; this is what keeps the badge and border until a click.
+   * id -> { a, t } for a post the user has opened: `a` is the activity token the
+   * post showed at that moment and `t` when it happened. `n: 1` is the only
+   * other kind: a post held unread until its card is opened, with `a` the
+   * activity token it showed then, and `read` the token it was read at when a
+   * reply or a reaction is what brought the mark back.
+   *
+   * A read record is not undone by a badge: Teams leaves one on the post after
+   * an open, draws one again as the row re-renders, and puts one back when the
+   * user picks "Mark as unread" — none of that is a change to the compact view.
+   * Only the post's own activity reopening it counts, and the map is synced so
+   * opening a card on one browser clears the same post on the others.
    */
   let newState = {};
   let newSaveTimer = 0;
-  /**
-   * id -> activity fingerprint, taken when a post was marked unread by hand.
-   *
-   * Teams marks every message newer than the one chosen as unread as well. Those
-   * posts had been read, so a badge that arrives with the fingerprint unchanged
-   * is Teams' bookkeeping and not news, and is held read (see refreshNewPost).
-   */
-  let cascadeGuard = null;
-  /** When that snapshot was taken, in ms: it is dropped once it is stale. */
-  let cascadeGuardAt = 0;
-  /** channel -> the newest post stamp it had when a post there was marked unread. */
-  let cascadeBase = {};
-  /** The channel name the baseline is filed under, kept until the channel changes. */
-  let cascadeKeyCache = '';
   /** id -> the activity fingerprint taken when the post was last read. */
   let activityState = {};
   let activitySaveTimer = 0;
@@ -293,21 +295,6 @@
   let forwardingClick = false;
   /** The post opened most recently: Teams' own menu belongs to it. */
   let lastOpenedRow = null;
-  /**
-   * The post the pointer was last over. Teams' hover toolbar carries the button
-   * that opens the message menu, and the menu itself is drawn outside the row,
-   * so the post a press in it belongs to is the one that was last hovered.
-   */
-  let lastHoveredRow = null;
-  /**
-   * When the pointer was last pressed, in ms. A badge that arrives while the
-   * user is clicking is Teams answering something they did; one that turns up
-   * with no press around it is Teams re-drawing its own state (see
-   * refreshNewPost).
-   */
-  let lastPointerAt = 0;
-  /** When a manual unread was written, in ms: a press and its click are one. */
-  let manualMarkAt = 0;
   /** The fold a click on an open post asked for, and its timer: see onPostClick. */
   let foldRow = null;
   let foldTimer = 0;
@@ -465,45 +452,8 @@
     return !!(anchor && row.contains(anchor)) || !!(focus && row.contains(focus));
   }
 
-  /**
-   * Teams' own "Mark as unread", read on the press and again on the click.
-   *
-   * The item lives in a menu Teams draws outside the post row, and that menu can
-   * go away on the press itself — taking the click with it — so the item is
-   * tested on the way down as well as on the click, and markPostUnread writes the
-   * mark only once for the pair. The post the menu belongs to is the one the
-   * press landed in, or — the menu and its toolbar being drawn outside the row
-   * in some builds — the one the pointer last hovered, which is what put the
-   * toolbar that opened it on screen.
-   */
-  function onUnreadMenuPress(event) {
-    if (!ready || !channelMode || !features || !features.compactPosts) return;
-    if (features.inboxZero) return;
-    const target = event.target;
-    if (!target || target.nodeType !== 1) return;
-    const row = target.closest('.tpp-post');
-    if (row) lastOpenedRow = row;
-    if (!isMarkUnreadItem(target)) return;
-    // The menu was opened on a row that Teams may have replaced since; the post
-    // is found by id then. A press in the menu is not in the row, and the
-    // toolbar that opened it need not be either, so the post last hovered names
-    // the one being acted on — the post opened earlier can be a different one.
-    // A post holding the keyboard is the last fallback.
-    let marked = row || lastHoveredRow || lastOpenedRow;
-    if (marked && !marked.isConnected) {
-      marked = marked.dataset.tppId ? findRow(marked.dataset.tppId) : null;
-    }
-    if (!marked) {
-      const active = document.activeElement;
-      marked = active && active.closest ? active.closest('.tpp-post') : null;
-    }
-    if (!marked) return;
-    markPostUnread(marked);
-  }
-
-  /** Remembers when the pointer was last pressed: see lastPointerAt. */
+  /** Drops a fold the user is working through: see holdFold. */
   function onAnyPointerDown(event) {
-    lastPointerAt = Date.now();
     // A press in the post whose fold is held means the user is working in it —
     // the second half of a double-click, or a drag over its text — so the fold
     // goes. A press anywhere else is them moving on: the fold still stands.
@@ -511,14 +461,6 @@
     const target = event.target;
     if (!target || target.nodeType !== 1) return;
     if (target === foldRow || foldRow.contains(target)) cancelHoldFold();
-  }
-
-  /** Remembers the post the pointer is over: its toolbar opens Teams' menu. */
-  function onPostHover(event) {
-    const target = event.target;
-    if (!target || target.nodeType !== 1) return;
-    const row = target.closest('.tpp-post');
-    if (row) lastHoveredRow = row;
   }
 
   /**
@@ -538,8 +480,7 @@
     } else unfolded.delete(id);
     row.classList.toggle('tpp-unfold', open);
     // Opening the card is what marks a post read in this view. Closing it again
-    // is not: a post closed without being read stays unread, and a post marked
-    // unread in Teams' own menu reads when it is opened next.
+    // is not: a post closed without being read stays unread.
     if (open) {
       lastOpenedRow = row;
       markPostOpened(row);
@@ -952,10 +893,18 @@
     // the card carries them. With Inbox Zero on, the Inbox and Archive tabs are
     // the marker instead, and these would contradict them.
     const unread = !features.inboxZero && row.dataset.tppNew === '1';
-    // One word for it: new posts and posts answered since they were read are
-    // both just unread. The mark and the purple edge stand until the card is
-    // opened.
-    const badgeText = unread ? 'Unread' : '';
+    // Two different things wear the same purple edge: a post Teams has just
+    // badged has not been opened yet and says Unread, while one that was opened
+    // and then answered or reacted to says Updated, with what it gained in the
+    // mark's tooltip. A badge put back by Teams' own "Mark as unread" has no
+    // activity behind it, so it never gets this far (see refreshNewPost).
+    // A mark that was reopened by activity is always an Updated one, even in
+    // the moment its tooltip cannot be worked out: showing it as Unread would
+    // claim a post is new when the user has already read it.
+    const updated = unread && isUpdatedPost(row);
+    const why = updated ? updatedWhy(row) : '';
+    const tip = updated ? why || 'New activity since you read it' : '';
+    const badgeText = unread ? (updated ? 'Updated' : 'Unread') : '';
 
     // A card already drawn is left alone unless the post's author, time, words
     // or read markers changed. Everything below reads and rewrites the card,
@@ -968,7 +917,7 @@
       time,
       raw.length,
       raw.slice(0, 24),
-      unread ? 'unread' : ''
+      updated ? `updated|${why}` : unread ? 'unread' : ''
     ].join('|');
     // An unread post reads as unread on the card itself: a bright purple edge
     // rather than the usual hairline. Written before the "nothing changed"
@@ -976,10 +925,11 @@
     // too.
     if (card) {
       card.classList.toggle('tpp-preview-unread', unread);
+      card.classList.toggle('tpp-preview-updated', updated);
       // Painted before the fingerprint check: Teams clearing its own badge
       // leaves the card unread but changes nothing else in it, and the word has
       // to stay on it at that moment too.
-      paintCardBadge(card, badgeText);
+      paintCardBadge(card, badgeText, tip);
     }
     if (card && row.dataset.tppCardOf === signature) {
       if (!row.classList.contains('tpp-previewed')) row.classList.add('tpp-previewed');
@@ -1046,19 +996,22 @@
     const snippetSlot = card.querySelector('.tpp-preview-snippet');
     snippetSlot.textContent = snippet;
     snippetSlot.hidden = !snippet;
-    paintCardBadge(card, badgeText);
+    paintCardBadge(card, badgeText, tip);
     row.classList.add('tpp-previewed');
   }
 
   /**
    * Writes the word on the card's read mark. An empty word hides the mark; the
-   * purple border is the card class's business, not this one's.
+   * purple border is the card class's business, not this one's. `title` is the
+   * tooltip: what an Updated post has gained since it was read.
    */
-  function paintCardBadge(card, text) {
+  function paintCardBadge(card, text, title) {
     const badge = card && card.querySelector('.tpp-preview-badge');
     if (!badge) return;
     badge.hidden = !text;
     if (text && badge.textContent !== text) badge.textContent = text;
+    const tip = text ? title || '' : '';
+    if ((badge.title || '') !== tip) badge.title = tip;
   }
 
   /** Whether Teams marks this post as unread. */
@@ -1067,262 +1020,157 @@
   }
 
   /**
-   * Whether this post is still new in the compact view.
+   * What a post has gained since it was read, as a sentence, or ''.
    *
-   * Teams' New badge is the arrival signal, but Teams clears it as soon as the
-   * channel is opened — so the first sighting is latched here, and the post
-   * keeps its badge and border until the user opens its card. A post that has
-   * been opened comes back only when the post itself has moved on (a reply,
-   * reaction, attachment or edit), which is what a bumped post looks like — or
-   * when it is marked unread again by hand: the menu press writes the mark
-   * outright (markPostUnread), and the badge Teams puts back on the post being
-   * read says the same thing when that press was missed.
+   * Only a mark that was brought back by activity has a read token to compare
+   * with, and only numbers that went up count: a row Teams is still drawing
+   * reads lower, and nothing is news until it is there.
    */
-  function refreshNewPost(id, row, ts, base) {
+  function updatedWhy(row) {
+    const id = row && row.dataset.tppId;
+    const record = id ? newState[id] : null;
+    if (!record || record.n !== 1 || typeof record.read !== 'string') return '';
+    const now = tokenParts(activityTokenOf(row));
+    const was = tokenParts(record.read);
+    const gained = (a, b) => (a >= 0 && b >= 0 && a > b ? a - b : 0);
+    const replies = gained(now.replies, was.replies);
+    const reactions = gained(now.reactions, was.reactions);
+    const parts = [];
+    if (replies) parts.push(`${replies} new ${replies === 1 ? 'reply' : 'replies'}`);
+    if (reactions) parts.push(`${reactions} new ${reactions === 1 ? 'reaction' : 'reactions'}`);
+    return parts.length ? `${parts.join(' and ')} since you read it` : '';
+  }
+
+  /**
+   * Whether this post's mark was brought back by activity — its card says
+   * Updated rather than Unread. Only the record decides: a mark written at an
+   * open is a read, and one written on a first sighting of the badge is not.
+   */
+  function isUpdatedPost(row) {
+    const id = row && row.dataset.tppId;
+    const record = id ? newState[id] : null;
+    return Boolean(record && record.n === 1 && typeof record.read === 'string');
+  }
+
+  /**
+   * Whether this post is unread in the compact view.
+   *
+   * Teams' New badge is the signal, and the first sighting of it is written down
+   * as an unread mark, because Teams clears the badge as soon as the channel is
+   * opened. The mark stands until the card is opened, which is the only thing
+   * this view counts as reading.
+   *
+   * A read post goes back to unread for one reason only: it has moved on. A
+   * badge on it is news when its replies or reactions have gone up since the
+   * token written at the read, and then the mark comes back as Updated, naming
+   * what it gained. A badge with no such movement behind it — the one Teams
+   * leaves after an open, the one it draws again on a re-render, and the one its
+   * own "Mark as unread" puts back on the post and on the newer ones — is
+   * ignored, and the post stays read.
+   */
+  function refreshNewPost(id, row) {
     if (!id || !features || !features.compactPosts || features.inboxZero) return false;
     const record = newState[id];
+    // A mark already written stands until the card is opened — Teams clearing
+    // its own badge is Teams tidying up, not the user reading.
     if (record && record.n === 1) return true;
     if (!isUnreadPost(row)) return false;
 
-    // A post that was read when another was marked unread: the badge Teams just
-    // put on it belongs to that marking, not to this post. The fingerprint taken
-    // at the click decides — if the post has not moved on, it is still read, and
-    // that is written down so the badge cannot come back later either.
-    if (cascadeGuard && Object.prototype.hasOwnProperty.call(cascadeGuard, id)) {
-      const held = cascadeGuard[id];
-      delete cascadeGuard[id];
-      if (!held || !movedOn(row, held)) {
-        setNewRecord(id, held ? { f: held } : {});
-        return false;
-      }
-    }
-    if (cascadeGuard && Date.now() - cascadeGuardAt > CASCADE_GUARD_MS) cascadeGuard = null;
-
-    // A badge on the post the user has open, long enough after it was opened
-    // that it is not the one Teams draws again as it re-renders the row: Teams
-    // has put its badge back by hand — its own "Mark as unread" — and the card
-    // says Unread for it, the way it does for a mark made from the menu.
-    if (
-      record &&
-      record.f &&
-      !movedOn(row, record.f) &&
-      unfolded.has(id) &&
-      // Matched by id: Teams re-renders the row, so the node these point at is
-      // not always the one being painted.
-      (id === idOfNode(lastOpenedRow) || id === idOfNode(lastHoveredRow)) &&
-      Date.now() - (record.t || 0) >= REOPEN_GRACE_MS &&
-      Date.now() - lastPointerAt <= BADGE_AFTER_PRESS_MS
-    ) {
-      setNewRecord(id, { n: 1, f: record.f });
+    if (!record) {
+      // The badge the user has not opened their way past: the mark goes in at
+      // once, so Teams clearing its badge before the card is opened does not
+      // clear it. The moment is kept as well, so two browsers' marks for the
+      // same post can be told apart when they are folded together.
+      setNewRecord(id, { n: 1, t: Date.now(), a: activityTokenOf(row) });
       return true;
     }
 
-    // A badge on a post that was already in the list when the user last marked a
-    // post unread in this channel: a hand mark is a bookmark, and the view does
-    // not follow Teams into marking the posts around it. The stamp decides — one
-    // that arrived after that moment is stamped later and is still news — and it
-    // is the part the guard above cannot reach, since Teams' cascade outlives
-    // the page and lands on rows this one never drew. Both stamps are asked, the
-    // post's own and the newest printed anywhere in its row, so a post answered
-    // since the mark is not the post that was there when it was made; and a post
-    // read here speaks for itself, so news after that read still comes back.
-    if (base && ts > 0 && ts <= base && activityStampOf(row) <= base) {
-      if (!record || !record.f || !movedOn(row, record.f)) return false;
+    // Read already. Only the post moving on brings the mark back, and never in
+    // the moment after the open: the counts are read out of a row Teams is
+    // still drawing (see OPEN_SETTLE_MS).
+    if (typeof record.a !== 'string') return false;
+    const age = Date.now() - Number(record.t);
+    if (age >= 0 && age < OPEN_SETTLE_MS) return false;
+    const token = activityTokenOf(row);
+    if (!movedPast(token, record.a)) {
+      // A count the row did not show when the card was opened is not news, but
+      // it is worth writing down now it is readable, so the next real reply can
+      // be counted rather than lost the same way.
+      const filled = fillGaps(record.a, token);
+      if (filled !== record.a) setNewRecord(id, { a: filled, t: record.t });
+      return false;
     }
 
-    // The badge is showing on a post already read: Teams leaves its badge in the
-    // row after an open, and draws one again when it re-renders the post. That
-    // is not news, so the post only comes back when it has moved past the
-    // fingerprint captured when it was read. A mark the user makes by hand does
-    // not go through here: it writes the record itself and is kept.
-    if (record && record.f && !movedOn(row, record.f)) return false;
-    setNewRecord(id, record && record.f ? { n: 1, f: record.f } : { n: 1 });
+    setNewRecord(id, { n: 1, t: Date.now(), a: token, read: record.a });
     return true;
   }
 
-  /** The post id a row carries, or an empty string. */
-  function idOfNode(row) {
-    return (row && row.dataset && row.dataset.tppId) || '';
+  /**
+   * Whether a post has moved past what its read record describes.
+   *
+   * Only the two counts that can be named are compared — replies and reactions —
+   * and only when the record could read them at the time (`-1` means the row was
+   * not showing a count). A number that appears where there was none is not
+   * news: it is the same post, drawn properly at last. The row's stamp is not
+   * compared at all: Teams re-draws its time label, and a longer "last replied"
+   * wording is a re-render, not a reply.
+   */
+  function movedPast(current, held) {
+    const now = tokenParts(current);
+    const was = tokenParts(held);
+    const grew = (a, b) => b >= 0 && a >= 0 && a > b;
+    return grew(now.replies, was.replies) || grew(now.reactions, was.reactions);
   }
 
-  /** Whether a post's replies, reactions, attachments or words changed since `held`. */
-  function movedOn(row, held) {
-    const current = activityOf(row);
-    return Boolean(current) && current !== held;
+  /**
+   * The `held` token with any count it could not read filled in from `current`.
+   *
+   * A read taken while Teams was still drawing the row can miss the reply count,
+   * so the gap is filled in on the next scan; a token nothing was missing from
+   * comes back as it went in, and the stamp is kept unless the new reading has
+   * one. Nothing is counted as activity here — this only makes the next reply
+   * countable. See movedPast for why a number that was previously unreadable is
+   * not news.
+   */
+  function fillGaps(held, current) {
+    const was = tokenParts(held);
+    const now = tokenParts(current);
+    const replies = was.replies < 0 && now.replies >= 0 ? now.replies : was.replies;
+    const reactions = was.reactions < 0 && now.reactions >= 0 ? now.reactions : was.reactions;
+    if (replies === was.replies && reactions === was.reactions) return held;
+    return [now.stamp || was.stamp, replies, reactions].join('|');
+  }
+
+  /** The three numbers in an activity token: stamp, replies, reactions. */
+  function tokenParts(token) {
+    const parts = String(token || '').split('|');
+    return {
+      stamp: Number(parts[0]) || 0,
+      replies: Number(parts[1]) || 0,
+      reactions: Number(parts[2]) || 0
+    };
   }
 
   /**
    * Marks a post read because its card was opened — the only thing in the
    * compact view that does. The badge and purple border go at once, and the
-   * post's fingerprint is kept so Teams' still-showing New badge cannot bring
-   * them back; only news after this point does.
+   * activity token taken here is what stops the New badge Teams still shows (or
+   * draws again on the next re-render) from bringing them back. The mark is
+   * written to sync storage straight away, so the other browser clears the same
+   * post without waiting for a scan to come round.
    */
   function markPostOpened(row) {
     const id = row && row.dataset.tppId;
     if (!id || !features || !features.compactPosts || features.inboxZero) return;
-    const fingerprint = activityOf(row);
-    // Opening the card is the whole decision. The fingerprint is kept so Teams'
-    // badge — left in the row, or drawn again on the next render — cannot bring
-    // the mark back: only the post moving on does that, or the user putting the
-    // badge back by hand (refreshNewPost). `t` is when the read happened: the
-    // re-drawn badge arrives in the moment after it, a hand-made mark later.
-    const now = Date.now();
-    setNewRecord(id, fingerprint ? { f: fingerprint, t: now } : { t: now });
+    setNewRecord(id, { a: activityTokenOf(row), t: Date.now() });
     delete row.dataset.tppNew;
 
     const card = row.querySelector(':scope > [data-tpp-ui="preview"]');
     if (card) {
-      card.classList.remove('tpp-preview-unread');
+      card.classList.remove('tpp-preview-unread', 'tpp-preview-updated');
       paintCardBadge(card, '');
     }
-    saveNewSoon();
-  }
-
-  /**
-   * Is this press Teams' own "Mark as unread" menu item?
-   *
-   * The item's words can be the label alone, the label followed by a keyboard
-   * shortcut, or an aria-label with nothing readable beside it, so both are read
-   * and the two words are looked for anywhere in them. "Mark all as unread" is a
-   * different action on a different set of posts, and is left to Teams.
-   */
-  function isMarkUnreadItem(target) {
-    const item = menuItemOf(target);
-    if (!item || item.closest('[data-tpp-ui]')) return false;
-    return readsAsMarkUnread(item);
-  }
-
-  /** Whether an element's own words name Teams' "Mark as unread" item. */
-  function readsAsMarkUnread(el) {
-    const label = collapse(el.getAttribute('aria-label') || '');
-    const text = collapse(el.textContent || '');
-    const words = `${label} ${text}`.trim();
-    if (!words || /\ball\b/i.test(words)) return false;
-    return /\bmark\b[^]{0,32}\bunread\b/i.test(words);
-  }
-
-  /**
-   * The row of the open menu a press landed in, or null when it is not in one.
-   *
-   * The item role is the answer when Teams gives one. Some builds draw the
-   * menu without item roles, so the smallest box between the press and the
-   * menu's own edge whose words name the item is taken instead. Without one of
-   * the two the press was never recognised at all, and the badge Teams puts
-   * back was left to the scan to swallow.
-   */
-  function menuItemOf(target) {
-    const item = target.closest(
-      '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"]'
-    );
-    if (item) return item;
-
-    const menu = target.closest(
-      '[role="menu"], [role="listbox"], [role="dialog"], [data-tid*="menu" i], [data-tid*="contextual" i]'
-    );
-    if (!menu) return null;
-
-    for (let node = target; node && node !== menu; node = node.parentElement) {
-      // A row that holds a submenu is the submenu's parent, not the item
-      // pressed: the walk keeps going until it reaches what was clicked.
-      if (node.querySelector(':scope > [role="menu"]')) continue;
-      if (readsAsMarkUnread(node)) return node;
-    }
-    return null;
-  }
-
-  /**
-   * A read post sent back to unread by Teams' own menu.
-   *
-   * The click is taken as the decision itself: the Badge Teams keeps in the row
-   * after an open would otherwise read as the badge the user already read past,
-   * which is why an already-read post could not be put back to unread. The mark
-   * is written and the card repainted at once, so the badge and the outline
-   * come back as soon as the menu closes.
-   */
-  function markPostUnread(row) {
-    const id = row && row.dataset.tppId;
-    if (!id || !features || !features.compactPosts || features.inboxZero) return;
-    // The press and the click that follows it are one action, so only the first
-    // writes the mark: the second would take the snapshot after Teams had
-    // already badged the posts below.
-    const now = Date.now();
-    if (now - manualMarkAt < 500) return;
-    manualMarkAt = now;
-    const fingerprint = activityOf(row);
-    // `n` is the mark itself: it stays until the card is opened, whatever
-    // Teams does with its own badge afterwards.
-    setNewRecord(id, fingerprint ? { n: 1, f: fingerprint } : { n: 1 });
-    row.dataset.tppNew = '1';
-    // Teams answers by marking every message newer than this one unread too.
-    // Those posts are not news — they were read before the click — so what each
-    // one looked like is taken now, and refreshNewPost holds it read while its
-    // fingerprint is unchanged (a real reply still brings it back).
-    cascadeGuard = {};
-    cascadeGuardAt = Date.now();
-    let newest = 0;
-    for (const other of document.querySelectorAll('.tpp-post')) {
-      newest = Math.max(newest, Number(other.dataset.tppTs) || 0);
-      const otherId = other.dataset.tppId;
-      // A post already showing a mark keeps it — including one Teams is still
-      // badging that the next scan has not reached yet. Only the posts Teams is
-      // about to badge are pinned, and the row itself is not one of them.
-      if (!otherId || otherId === id || other.dataset.tppNew === '1') continue;
-      if (isUnreadPost(other)) continue;
-      cascadeGuard[otherId] = activityOf(other);
-    }
-    // How far the channel had got, written down: the guard above lives in this
-    // page and for two minutes, while Teams' cascade does not. See refreshNewPost.
-    rememberCascadeBase(newest);
-    paintPreview(row);
-    scheduleScan(true);
-  }
-
-  /**
-   * Remembers how far the channel had got when a post in it was marked unread.
-   *
-   * Teams marks the posts around the one chosen unread as well, and those marks
-   * are the channel's, not this page's: they are still there after a reload, on
-   * rows this page has not drawn yet. Holding them read therefore cannot depend
-   * on the guard taken at the click. The stamp can: anything stamped at or before
-   * the newest post of that moment was already in the list, so its badge is Teams
-   * answering the mark. A post that arrives afterwards is stamped later and is
-   * news, which is the whole distinction the view needs.
-   */
-  function rememberCascadeBase(newest) {
-    const key = cascadeKey();
-    if (!key || !newest) return;
-    delete cascadeBase[key];
-    cascadeBase[key] = newest;
-    const entries = Object.entries(cascadeBase);
-    if (entries.length > CASCADE_BASE_LIMIT) {
-      cascadeBase = Object.fromEntries(entries.slice(-CASCADE_BASE_LIMIT));
-    }
-    try {
-      chrome.storage.local.set({ [CASCADE_BASE_KEY]: cascadeBase }, () => {
-        void chrome.runtime.lastError;
-      });
-    } catch (_) {
-      // The extension was reloaded while this page stayed open.
-    }
-  }
-
-  /** The name a channel is filed under in the baseline map, read once per channel. */
-  function cascadeKey() {
-    if (cascadeKeyCache) return cascadeKeyCache;
-    const key = openRailKeys()[0] || lastChannelTitle || '';
-    // Empty is not an answer — the header can be mid-paint — so it is not kept.
-    if (key) cascadeKeyCache = key;
-    return key;
-  }
-
-  /** Keeps only well-formed baselines, newest last, under the cap. */
-  function normalizeCascadeBase(stored) {
-    if (!stored || typeof stored !== 'object') return {};
-    const entries = Object.entries(stored).filter(
-      ([key, value]) =>
-        typeof key === 'string' && key.length > 0 && typeof value === 'number' && value > 0
-    );
-    return Object.fromEntries(entries.slice(-CASCADE_BASE_LIMIT));
+    flushNew();
   }
 
   /** Writes one compact-view mark, newest last so trimming keeps recent ones. */
@@ -2984,6 +2832,53 @@
     ].join('|');
   }
 
+  /**
+   * A post as it stands, written so two browsers describe it the same way.
+   *
+   * The token is Teams' own numbers — the newest stamp printed in the row, the
+   * reply count and how many reactions the post carries. It is deliberately not
+   * a hash of the rendered words or of the attachments: those can differ from
+   * one device to another while the post is the same, and two browsers would
+   * then disagree about whether a post synced as read had moved on. Only the two
+   * counts are compared when a mark is reopened (see movedPast): the stamp is
+   * kept for the record, not treated as activity of its own.
+   */
+  function activityTokenOf(row) {
+    if (!row) return '';
+    return [
+      activityStampOf(row) || stampOf(row) || 0,
+      replyCountOf(row),
+      reactionCountOf(row)
+    ].join('|');
+  }
+
+  /**
+   * How many reactions the post carries, from the chips' own numbers.
+   *
+   * "Add reaction" prints no count and comes and goes with hover, so counting it
+   * would reopen a post the pointer merely crossed; the counts are summed so a
+   * second reaction on the same emoji counts as the post moving on.
+   */
+  function reactionCountOf(row) {
+    let total = 0;
+    try {
+      for (const el of row.querySelectorAll(
+        '[data-tid*="reaction" i], [aria-label*="reaction" i]'
+      )) {
+        if (el.closest('[data-tpp-ui]')) continue;
+        const words = collapse(
+          `${el.getAttribute('aria-label') || ''} ${el.textContent || ''}`
+        );
+        const counts = words.match(/\d[\d,]*/g);
+        if (!counts) continue;
+        total += Number(counts[counts.length - 1].replace(/,/g, '')) || 0;
+      }
+    } catch (_) {
+      // No reaction markup in this build: replies alone say the post moved on.
+    }
+    return total;
+  }
+
   /** Keeps only well-formed fingerprints, newest last, under the cap. */
   function normalizeActivity(stored) {
     if (!stored || typeof stored !== 'object') return {};
@@ -3230,9 +3125,6 @@
 
   function rebuildRows(list) {
     const next = new Map();
-    // Read once for the pass: the baseline is asked of every badged post, and
-    // finding the channel's name means walking the rail.
-    const base = cascadeBase[cascadeKey()] || 0;
 
     for (const row of collectRows(list, false)) {
       // A post Teams is drawing in one of its own panes — the view a channel
@@ -3305,7 +3197,7 @@
       // The compact view's own marker: a latched unread mark keeps the card
       // unread until its card is opened (markPostOpened), however soon Teams
       // clears its own badge.
-      if (refreshNewPost(id, row, ts, base)) row.dataset.tppNew = '1';
+      if (refreshNewPost(id, row)) row.dataset.tppNew = '1';
       else if (row.dataset.tppNew !== undefined) delete row.dataset.tppNew;
 
       setTag(row, isRead ? 'read' : '');
@@ -4870,10 +4762,6 @@
   function resetForChannelChange() {
     lastList = null;
     listRect = null;
-    // The guard was taken for the posts of the channel being left, and the name
-    // the baseline is filed under is that channel's.
-    cascadeGuard = null;
-    cascadeKeyCache = '';
   }
 
   // -------------------------------------------------------------- persistence
@@ -4909,8 +4797,24 @@
     }, 200);
   }
 
+  /**
+   * The newest compact-view marks that fit in one sync item.
+   *
+   * Oldest first, so the entries dropped are the ones furthest back in the
+   * channel: the same order the count limit drops them in, only measured in the
+   * size chrome.storage.sync actually enforces.
+   */
+  function fitNewState(map) {
+    const entries = Object.entries(map).slice(-NEW_POST_LIMIT);
+    const cost = ([key, value]) => JSON.stringify(key).length + JSON.stringify(value).length + 2;
+    let size = 2; // the braces around the map
+    for (const entry of entries) size += cost(entry);
+    while (entries.length > 1 && size > SYNC_ITEM_BUDGET) size -= cost(entries.shift());
+    return Object.fromEntries(entries);
+  }
+
   async function persistNew() {
-    let trimmed = Object.fromEntries(Object.entries(newState).slice(-NEW_POST_LIMIT));
+    let trimmed = fitNewState(newState);
     newState = trimmed;
     if (await writeSync({ [NEW_POSTS_KEY]: trimmed })) return;
 
@@ -4919,6 +4823,89 @@
     );
     newState = trimmed;
     await writeSync({ [NEW_POSTS_KEY]: trimmed });
+  }
+
+  /**
+   * Writes the compact-view marks now, for a decision that must not wait: a card
+   * the user has just opened is read on this page at once, and the write is what
+   * clears the same post on the other browser.
+   */
+  function flushNew() {
+    clearTimeout(newSaveTimer);
+    newSaveTimer = 0;
+    persistNew();
+  }
+
+  /** When a compact-view mark was made, in ms. A mark without one is oldest. */
+  function markTimeOf(value) {
+    return value && Number(value.t) > 0 ? Number(value.t) : 0;
+  }
+
+  /** Whether one mark is the newer decision about its post. */
+  function newerMark(value, held) {
+    const mine = value && typeof value === 'object' ? value : {};
+    const theirs = held && typeof held === 'object' ? held : {};
+
+    // A read against an unread mark is not a question of clocks: a browser can
+    // be looking at Teams' badge on a post that was read on the other one — the
+    // badge is just the state that device last got — and its sighting is stamped
+    // after the read while describing older activity. So the two are compared by
+    // the activity each one covers: a mark whose activity is past the read's is
+    // news the read never saw, and wins; otherwise the read is what the post was
+    // last known to be, and a badge alone never undoes it.
+    const mineUnread = mine.n === 1;
+    const theirsUnread = theirs.n === 1;
+    if (mineUnread !== theirsUnread) {
+      const unread = mineUnread ? mine : theirs;
+      const read = mineUnread ? theirs : mine;
+      const unreadWins =
+        typeof unread.a === 'string' &&
+        typeof read.a === 'string' &&
+        movedPast(unread.a, read.a);
+      return mineUnread ? unreadWins : !unreadWins;
+    }
+
+    // Two reads of the same post: the one covering more of it is the later read,
+    // whatever the clocks say, because activity on a post only goes up.
+    if (!mineUnread && !theirsUnread) {
+      if (typeof mine.a === 'string' && typeof theirs.a === 'string') {
+        if (movedPast(mine.a, theirs.a)) return true;
+        if (movedPast(theirs.a, mine.a)) return false;
+      }
+    }
+
+    const at = markTimeOf(mine);
+    const was = markTimeOf(theirs);
+    if (at !== was) return at > was;
+    // Two marks of the same moment — or two written by an older build, with no
+    // moment at all: one answer has to win on every browser, so the marks are
+    // compared by what they say rather than by which one arrived last.
+    return JSON.stringify(mine) > JSON.stringify(theirs);
+  }
+
+  /**
+   * Folds two copies of the compact-view marks together, newest decision per post.
+   *
+   * Each browser keeps the whole map and Chrome Sync hands one whole map to the
+   * other, so a map written a moment before the other's change is the one that
+   * survives — which is how a post read on one computer came back unread after
+   * the other saved. Taking the newer decision per post makes the two maps meet
+   * on what the user last did; the entries are ordered oldest first, so trimming
+   * keeps the recent ones.
+   */
+  function mergeNewStates(one, other) {
+    const merged = new Map();
+    for (const map of [one, other]) {
+      for (const [id, value] of Object.entries(map || {})) {
+        const held = merged.get(id);
+        if (!held || newerMark(value, held)) merged.set(id, value);
+      }
+    }
+    const entries = Array.from(merged.entries()).sort(
+      (a, b) =>
+        markTimeOf(a[1]) - markTimeOf(b[1]) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)
+    );
+    return Object.fromEntries(entries.slice(-NEW_POST_LIMIT));
   }
 
   // ------------------------------------------------------------- placeholders
@@ -5834,7 +5821,6 @@
   function teardownChannelUi() {
     uiDrawn = false;
     unwatchPostSizes();
-    cascadeKeyCache = '';
     perf.loadStartedAt = 0;
     settleTries = 0;
     listDirty = true;
@@ -5893,10 +5879,14 @@
       const local = await chrome.storage.local.get([
         ACTIVITY_KEY,
         RAIL_UNREAD_KEY,
-        CASCADE_BASE_KEY
+        LEGACY_CASCADE_KEY
       ]);
       activityState = normalizeActivity(local && local[ACTIVITY_KEY]);
-      cascadeBase = normalizeCascadeBase(local && local[CASCADE_BASE_KEY]);
+      // The unread baseline an older build kept for Teams' cascade: following
+      // the badge needs none, so the map goes rather than spending the quota.
+      if (local && local[LEGACY_CASCADE_KEY]) {
+        chrome.storage.local.remove(LEGACY_CASCADE_KEY, () => void chrome.runtime.lastError);
+      }
       // The rail dot is off in this release, so no latch is read back, and the
       // map an older build wrote is dropped: kept, it would dot the rail the
       // moment the feature is switched on again, from news long since read.
@@ -5907,7 +5897,6 @@
     } catch (_) {
       activityState = {};
       railUnread = {};
-      cascadeBase = {};
     }
 
     // Entries an older build inferred from Teams' "New" badge and "Last read"
@@ -6141,12 +6130,7 @@
     });
 
     document.addEventListener('click', onPostClick, true);
-    // The menu's item is read before Teams can close the menu over it.
-    document.addEventListener('pointerdown', onUnreadMenuPress, true);
-    document.addEventListener('click', onUnreadMenuPress, true);
-    // Which post the message menu was opened from: see lastHoveredRow.
-    document.addEventListener('pointerover', onPostHover, true);
-    // When the last press was: see lastPointerAt.
+    // Which post a press in the row was on, for the fold it may cancel.
     document.addEventListener('pointerdown', onAnyPointerDown, true);
     document.addEventListener('keydown', onPostKeyDown, true);
     window.addEventListener('scroll', onAnyScroll, { passive: true, capture: true });
@@ -6158,16 +6142,17 @@
   // Keep an open tab in sync when settings, archives or activity change elsewhere.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (changes[NEW_POSTS_KEY]) {
-      newState = normalizeMap(changes[NEW_POSTS_KEY].newValue, NEW_POST_LIMIT);
+      const incoming = normalizeMap(changes[NEW_POSTS_KEY].newValue, NEW_POST_LIMIT);
+      newState = mergeNewStates(newState, incoming);
+      // The map here held a decision newer than the one that arrived: write the
+      // fold back, so the browser that saved first sees the newer one too.
+      if (JSON.stringify(newState) !== JSON.stringify(incoming)) saveNewSoon();
       scheduleScan(true);
     }
     if (!ready) return;
     if (area === 'local') {
       if (changes[ACTIVITY_KEY]) {
         activityState = normalizeActivity(changes[ACTIVITY_KEY].newValue);
-      }
-      if (changes[CASCADE_BASE_KEY]) {
-        cascadeBase = normalizeCascadeBase(changes[CASCADE_BASE_KEY].newValue);
       }
       return;
     }

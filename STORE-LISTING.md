@@ -1,6 +1,6 @@
 # Chrome Web Store submission pack — Teams++
 
-Everything needed to submit v1.0.7 of Teams++: copy for the listing, answers for
+Everything needed to submit v1.1.0 of Teams++: copy for the listing, answers for
 every question in the item form, and the checks a reviewer is likely to make.
 
 The extension collects no data and makes no network requests, which makes the
@@ -10,7 +10,7 @@ privacy section simple to answer honestly: **no collection, no transmission.**
 
 ## 1. Before you submit
 
-- [ ] `manifest.json` version is the version you are uploading (`1.0.7`).
+- [ ] `manifest.json` version is the version you are uploading (`1.1.0`).
 - [ ] The zip contains `manifest.json` at its **root** (not inside a folder).
 - [ ] The zip contains no development files: `.git/`, `.freebuff/`, `*.md`,
       `icons/teamsplusplus*.png`.
@@ -50,7 +50,7 @@ Teams++ makes Microsoft Teams channels readable.
 
 Every post in a channel becomes a compact card: the author's picture, their name and the time, the post's opening line as a headline, and the first two lines of the text. Click a card to open the whole post, replies and all; click it again or press Escape to fold it.
 
-The card carries the read state too. A post that has arrived, or one answered since you last read it, wears an Unread badge and a purple border until you open the card. Opening a card is what marks it read — nothing is marked read behind your back. Never miss a new message again!
+The card carries the read state too. A post you have not opened wears an Unread badge and a purple border; one you have opened that has since been answered or reacted to says Updated, and its tooltip names what it gained. Opening a card is what marks it read — nothing is marked read behind your back — and a read made in one browser clears the same post in the others signed in to the same profile. Teams' own "Mark as unread" is ignored: the badges it puts back do not change the cards. Never miss a new message again!
 
 The popup has two switches, Compact posts and Date lines. The cards print the date in the gaps between one day's posts and the next, hold the date of the day you are reading at the edge you read from, and both can be turned off.
 
@@ -64,19 +64,20 @@ Teams++ is an independent project. It is not affiliated with, endorsed by, or sp
 ### What's new in this version (paste into the item form)
 
 ```
-Date lines now belong to the post you are reading. Scrolling through one long
-open post used to walk the held date through the days of the posts further down
-the channel; the date is now the day of the post under the edge, and it hands
-over only when that post's own next day arrives.
+A post you have read can come back without looking new. A card you opened that
+is then answered or reacted to wears the mark again, this time saying Updated,
+and its tooltip names what arrived while it was folded — "2 new replies and 1
+new reaction since you read it". Opening the card clears it as before, and a
+post that has gained nothing stays folded and read.
 
-The order of a channel is read from the whole run of posts rather than its two
-ends, so the day's lines land on the right side of every gap and the date holds
-at the edge you read from. A post also keeps the day its newest reply gave it
-while Teams re-renders the row.
+Teams' own Mark as unread is left to Teams. The menu item still badges that post
+and the newer ones in its list, and the cards do not change: a post read here
+stays read, and the read reaches the other browsers signed in to the same
+profile. Only a reply or a reaction reopens a card.
 
-Compact posts and Date lines are now two independent switches, and the date
-lines can be kept with Teams' own posts as well as with the cards. The Manually
-mark as read switch is gone: a card keeps its Unread badge until you open it.
+A count Teams was still drawing when a card was opened no longer passes for a
+reply that arrived, so a mark brought back by real activity always says Updated
+instead of Unread, and always has something to name.
 ```
 
 ---
@@ -251,24 +252,28 @@ avatars or message text in anything you would not publish; use a test channel.
    Each post is a compact card; a chevron opens it.
 4. Click a card: the post opens in Teams' own layout with replies intact; click
    again (or press Escape) to fold it. Opening is what marks it read.
-5. Use Teams' own **Mark as unread** on a post: its card comes back as UNREAD
-   with a purple border. Open the card: the mark clears.
-6. Open the popup: two switches, Compact posts and Date lines. Each works on its
+5. Reply to a post that has already been opened, from another account or a new
+   message: its card comes back marked UPDATED, the tooltip naming the replies
+   it gained.
+6. Use Teams' own **Mark as unread** on a post that has been opened: Teams
+   badges it and the newer posts, and the cards are unchanged — a post read in
+   the compact view stays read, on every signed-in browser.
+7. Open the popup: two switches, Compact posts and Date lines. Each works on its
    own — date lines can be left on with compact posts off. Toggling them changes
    the page behaviour; settings survive a reload and sync.
-7. Revoke site access in `chrome://extensions` → Site access → remove Teams. The
+8. Revoke site access in `chrome://extensions` → Site access → remove Teams. The
    content script is unregistered and Teams renders untouched.
-8. Watch the DevTools Network panel while using the extension: there are no
+9. Watch the DevTools Network panel while using the extension: there are no
    requests originated by the extension.
 
 ---
 
 ## 10. Release checklist for this version
 
-- `manifest.json` → `1.0.7`
+- `manifest.json` → `1.1.0`
 - `background.js` → `CONTENT_VERSION` bumped so open Teams tabs pick up the new
   content script after an extension reload
-- `changelog.html` → v1.0.7 entry marked Current, v1.0.6 demoted
+- `changelog.html` → v1.1.0 entry marked Current, v1.0.7 demoted
 - `src/popup/popup.html` → footer version (the popup also reads the version from
   the manifest on load, so this is only what is there before it runs)
 - The "What's new in this version" text in §2 pasted into the item form

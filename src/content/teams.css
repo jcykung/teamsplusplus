@@ -790,6 +790,17 @@ html[data-tpp-compact-posts] .tpp-post.tpp-previewed:not(.tpp-unfold) > *:not([d
   text-transform: uppercase;
 }
 
+/*
+ * A post that has been read and then answered or reacted to. Same purple edge,
+ * quieter mark: it is news about a post already seen, not one still waiting to
+ * be opened, and the counts behind it are in the mark's tooltip.
+ */
+.tpp-preview-updated .tpp-preview-badge {
+  background: transparent;
+  color: var(--tpp-purple);
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
 html[data-tpp-compact-posts] .tpp-post:not(.tpp-unfold) .tpp-preview:hover .tpp-preview-badge {
   background: #fff;
   color: var(--tpp-purple);

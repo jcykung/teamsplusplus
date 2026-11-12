@@ -15,11 +15,19 @@
  *                           costs nothing until it is unread again.
  *   teamsPlusPlus.view      "inbox" (read posts hidden) or "archives"
  *                           (only read posts shown)
- *   teamsPlusPlus.newPosts  post id -> { n: 1 } while the compact card is
- *                           unread, or { f } with the fingerprint captured when
- *                           it was read and `t`, when that read happened. The
- *                           only thing that marks a post read in the compact
- *                           view is opening its card.
+ *   teamsPlusPlus.newPosts  the compact view's own marks, one per post. { a, t }
+ *                           once the card has been opened: `a` is the activity
+ *                           token the post showed then, `t` when it was read.
+ *                           { n: 1, t, a } is a post held unread until its card
+ *                           is opened, `a` being the token seen when it was
+ *                           latched. A read post is marked again only when its
+ *                           activity is past `a`; the badge Teams leaves after
+ *                           an open, or puts back for its own "Mark as unread",
+ *                           is ignored. Such a mark also keeps `read`, the token
+ *                           the post was read at, so the card can say what it
+ *                           has gained. With no entry a post follows Teams'
+ *                           badge: unread while it shows, then written down as an
+ *                           unread mark.
  */
 (function (root) {
   'use strict';

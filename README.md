@@ -58,9 +58,15 @@ painted behind the posts, with the desktop setting only as a last resort — so 
 card matches Teams even when the desktop is set the other way, and it repaints
 the moment Teams switches.
 
-A post that has arrived, or one answered since you last read it, wears a bright
-purple border and an **Unread** badge beside the time, so what still waits for
-you stands out at a glance. The mark stays until you open the card.
+A post that Teams marks **New** wears a bright purple border and a mark beside
+the time, so what still waits for you stands out at a glance. There are two
+words on that mark, because there are two different things: a post you have not
+opened yet says **Unread**, and one you have opened that has since been answered
+or reacted to says **Updated**, with what it gained — "2 new replies and 1 new
+reaction since you read it" — in the mark's tooltip. The badge is the arrival
+signal, not the whole rule: the first sighting is written down and the mark stays
+until you open the card, so Teams clearing its own badge does not quietly mark a
+post read.
 
 The posts are also split by day. A line in a lighter purple carries the date in
 the middle of it: **Today**, **Yesterday**, then the day's name, drawn from the
@@ -79,27 +85,24 @@ Teams prints on the row — the post's own time, or a newer reply's — so a pos
 lifted back up by a reply is filed under the day it came back rather than the
 day it was written.
 
-Opening a card marks a post read. Closing it again does not. The badge and the
-purple border go the moment the card is opened, and nothing else clears them,
-because Teams' idea of read is not the one this view follows. A post that has
-moved on since you read it — a reply, a reaction, a new attachment or an edit —
-wears the mark again.
+Opening a card marks a post read. Closing it again does not. The mark and the
+purple border go the moment the card is opened — and because the read is written
+to sync storage straight away, the same post clears on the other browsers signed
+in to the same profile. Teams' lingering New badge is ignored; what brings the
+mark back is the post itself moving on. A post that has been answered or reacted
+to since you read it wears the mark again, as **Updated**, naming in its tooltip
+what arrived while it was folded.
 
 Changing channel folds whatever was open. A channel is always entered as a list of
 cards, the way it looked before any of them was opened, so a post you were
 reading in one channel does not come back open the next time you visit it.
 
-Marking a post unread brings the badge and border back even on a post already
-marked read, and the card says **Unread** straight away.
-Opening the card again is the only thing that clears it — opening it to reach the
-menu is not what does, and closing it again is not either. Teams marks the posts
-around that one unread as well when it does this, and it keeps them marked: the
-marks are the channel's, so they are still there after a reload. This view does
-not follow it there — the mark stays on the one post you chose, a bookmark to
-come back to. The rest stay read, whatever Teams badges on them. A post that
-arrives after the mark is newer than it and says **Unread** as usual, and one you
-have read here comes back if it has moved on since (a reply, a reaction, an
-attachment or an edit).
+Teams' own **Mark as unread** is left to Teams. It brings the badge back on that
+post and on the newer ones in the channel, and the cards do not change: a post
+read here stays read, on every signed-in browser, because a mark put back that
+way carries no reply or reaction behind it. Only real activity reopens a post,
+which is what makes an **Updated** one different. Opening a card is still the
+only thing that clears a mark, and closing it again does not restore one.
 
 The Compact posts and Date lines switches live in the popup, and their settings
 are stored in `chrome.storage.sync`, so they follow the user to every Chrome
@@ -116,7 +119,7 @@ Teams++ is built so that there is nothing to leak:
   read from the page that is already open, used to draw the cards, and kept in
   the browser. None of it is sent anywhere, logged or shared.
 - **Storage is settings and marks, not content.** `chrome.storage.sync` holds the
-  feature switches, the view, and post ids with a timestamp, a fingerprint and a
+  feature switches, the view, and post ids with an activity token and a
   read/unread mark — no message text, no author names, no attachments. Local
   storage holds only fingerprints derived from the page.
 - **Access is optional and revocable.** No Teams host access is granted at

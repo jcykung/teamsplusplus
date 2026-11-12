@@ -1,6 +1,6 @@
 # Chrome Web Store submission pack — Teams++
 
-Everything needed to submit v1.1.0 of Teams++: copy for the listing, answers for
+Everything needed to submit v1.1.1 of Teams++: copy for the listing, answers for
 every question in the item form, and the checks a reviewer is likely to make.
 
 The extension collects no data and makes no network requests, which makes the
@@ -10,7 +10,7 @@ privacy section simple to answer honestly: **no collection, no transmission.**
 
 ## 1. Before you submit
 
-- [ ] `manifest.json` version is the version you are uploading (`1.1.0`).
+- [ ] `manifest.json` version is the version you are uploading (`1.1.1`).
 - [ ] The zip contains `manifest.json` at its **root** (not inside a folder).
 - [ ] The zip contains no development files: `.git/`, `.freebuff/`, `*.md`,
       `icons/teamsplusplus*.png`.
@@ -64,20 +64,20 @@ Teams++ is an independent project. It is not affiliated with, endorsed by, or sp
 ### What's new in this version (paste into the item form)
 
 ```
-A post you have read can come back without looking new. A card you opened that
-is then answered or reacted to wears the mark again, this time saying Updated,
-and its tooltip names what arrived while it was folded — "2 new replies and 1
-new reaction since you read it". Opening the card clears it as before, and a
-post that has gained nothing stays folded and read.
+A read now reaches the other signed-in browsers even when they were closed at the
+time. Two copies of a channel open at once could end up disagreeing for good — a
+post read on one computer still sitting Unread on the other, with nothing left to
+put it right — because a page still loading could put back the map it had read
+before a change from the other browser arrived, and a write Chrome refused (the
+item over its quota, or the minute's allowance used up) was dropped without a
+word. The load now folds the two maps together, and a refused write is offered
+again a little later.
 
-Teams' own Mark as unread is left to Teams. The menu item still badges that post
-and the newer ones in its list, and the cards do not change: a post read here
-stays read, and the read reaches the other browsers signed in to the same
-profile. Only a reply or a reaction reopens a card.
-
-A count Teams was still drawing when a card was opened no longer passes for a
-reply that arrived, so a mark brought back by real activity always says Updated
-instead of Unread, and always has something to name.
+Reads follow the browser's own sync: Chrome with Chrome, signed in to the same
+account. They do not cross to a different browser, such as Brave or Dia, each of
+which keeps its own marks. Teams' own Mark as unread is still left to Teams, and
+only a reply or a reaction reopens a card — as Updated, naming what arrived while
+it was folded.
 ```
 
 ---
@@ -270,10 +270,10 @@ avatars or message text in anything you would not publish; use a test channel.
 
 ## 10. Release checklist for this version
 
-- `manifest.json` → `1.1.0`
+- `manifest.json` → `1.1.1`
 - `background.js` → `CONTENT_VERSION` bumped so open Teams tabs pick up the new
   content script after an extension reload
-- `changelog.html` → v1.1.0 entry marked Current, v1.0.7 demoted
+- `changelog.html` → v1.1.1 entry marked Current, v1.1.0 demoted
 - `src/popup/popup.html` → footer version (the popup also reads the version from
   the manifest on load, so this is only what is there before it runs)
 - The "What's new in this version" text in §2 pasted into the item form

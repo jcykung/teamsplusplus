@@ -294,13 +294,30 @@
       <div class="subtitle">What's new and improved in Teams++</div>
 
       <ul class="timeline">
-        <!-- v1.1.0 -->
+        <!-- v1.1.1 -->
         <li class="timeline-item latest">
+          <div class="timeline-marker"></div>
+          <div class="timeline-header">
+            <h2 class="version-title">v1.1.1</h2>
+            <span class="version-date">November 2026</span>
+            <span class="badge badge-latest">Current</span>
+          </div>
+          <ul class="change-list">
+            <li class="change-item">
+              <span class="badge-tag tag-fix">FIX</span><strong>A read mark no longer goes missing on its way to the other browsers:</strong> two copies of a channel open at once could end up disagreeing for good — a post read on the laptop still sitting <strong>Unread</strong> on the desktop, with nothing left to put it right. The marks are merged per post, so the fault was never in the comparing but in what had been stored: a page still loading put back the map it had read before a change from the other browser arrived, and a write Chrome refused — the item over its quota, or the minute's allowance used up — was dropped without a word. The load now folds the two maps together instead of choosing one, and a refused write is offered again a little later, so a mark reaches the other browser even when that browser was shut at the time.
+            </li>
+            <li class="change-item">
+              <span class="badge-tag tag-improve">IMPROVE</span><strong>Who syncs with whom is said plainly:</strong> the README no longer leaves it to be guessed. Reads follow the browser's own sync — Chrome with Chrome, signed in to the same account — and they do not cross to a different browser, such as Brave or Dia, which keep their own marks.
+            </li>
+          </ul>
+        </li>
+
+        <!-- v1.1.0 -->
+        <li class="timeline-item">
           <div class="timeline-marker"></div>
           <div class="timeline-header">
             <h2 class="version-title">v1.1.0</h2>
             <span class="version-date">November 2026</span>
-            <span class="badge badge-latest">Current</span>
           </div>
           <ul class="change-list">
             <li class="change-item">

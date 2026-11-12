@@ -88,8 +88,11 @@ day it was written.
 Opening a card marks a post read. Closing it again does not. The mark and the
 purple border go the moment the card is opened — and because the read is written
 to sync storage straight away, the same post clears on the other browsers signed
-in to the same profile. Teams' lingering New badge is ignored; what brings the
-mark back is the post itself moving on. A post that has been answered or reacted
+in to the same profile. That is the browser's own sync service at work — Chrome
+signed in to the same account on another computer — and it does not reach a
+different browser, such as Brave or Dia, each of which keeps its own marks.
+Teams' lingering New badge is ignored; what brings the mark back is the post
+itself moving on. A post that has been answered or reacted
 to since you read it wears the mark again, as **Updated**, naming in its tooltip
 what arrived while it was folded.
 

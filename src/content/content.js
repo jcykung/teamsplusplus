@@ -64,6 +64,16 @@
   const SYNC_ITEM_BUDGET = 7000;
 
   /**
+   * How long after a refused write the marks are offered again, in ms.
+   *
+   * chrome.storage.sync refuses a write when the item is over its quota or when
+   * the minute's operations are used up, and both clear on their own. A mark
+   * that was never stored is not merely delayed: the other browser never sees
+   * it, so it is retried instead of dropped. See persistNew.
+   */
+  const NEW_RETRY_MS = 15000;
+
+  /**
    * How long after a card is opened its post cannot be re-marked, in ms.
    *
    * The reply and reaction counts are read out of a row Teams is still drawing,
@@ -164,7 +174,7 @@
     '[data-tid*="message-detail" i]'
   ].join(', ');
   /** The build on disk; also left on <html> so the running script can be checked. */
-  const BUILD = '2026-11-11.4';
+  const BUILD = '2026-11-12.1';
   /** What the stylesheet reads to pick its light or dark palette. */
   const THEME_ATTR = 'data-tpp-theme';
   /** Attributes Teams leaves behind that name the theme. */
@@ -232,6 +242,8 @@
    */
   let newState = {};
   let newSaveTimer = 0;
+  /** A refused write, waiting for the quota or the minute's allowance to clear. */
+  let newRetryTimer = 0;
   /** id -> the activity fingerprint taken when the post was last read. */
   let activityState = {};
   let activitySaveTimer = 0;
@@ -4816,13 +4828,41 @@
   async function persistNew() {
     let trimmed = fitNewState(newState);
     newState = trimmed;
-    if (await writeSync({ [NEW_POSTS_KEY]: trimmed })) return;
+    if (await writeSync({ [NEW_POSTS_KEY]: trimmed })) {
+      cancelNewRetry();
+      return;
+    }
 
+    // Per-item quota: keep only the newest quarter and try once more rather
+    // than silently losing the change.
     trimmed = Object.fromEntries(
       Object.entries(trimmed).slice(-Math.max(10, Math.floor(NEW_POST_LIMIT / 4)))
     );
     newState = trimmed;
-    await writeSync({ [NEW_POSTS_KEY]: trimmed });
+    if (await writeSync({ [NEW_POSTS_KEY]: trimmed })) {
+      cancelNewRetry();
+      return;
+    }
+
+    // Refused again — the minute's write operations are used up, most likely.
+    // The marks are still here, so they are offered again a little later: a
+    // mark that was never stored is one the other browser will never apply, and
+    // nothing else would ever send it.
+    scheduleNewRetry();
+  }
+
+  /** Asks for the marks to be saved again after a write storage refused. */
+  function scheduleNewRetry() {
+    if (newRetryTimer) return;
+    newRetryTimer = window.setTimeout(() => {
+      newRetryTimer = 0;
+      persistNew();
+    }, NEW_RETRY_MS);
+  }
+
+  function cancelNewRetry() {
+    if (newRetryTimer) window.clearTimeout(newRetryTimer);
+    newRetryTimer = 0;
   }
 
   /**
@@ -5874,7 +5914,17 @@
 
     features = normalize(items[STORAGE_KEY]);
     readState = normalizeMap(items[UNREAD_KEY], READ_LIMIT);
-    newState = normalizeMap(items[NEW_POSTS_KEY], NEW_POST_LIMIT);
+    // Folded with what has already arrived rather than replaced by the snapshot:
+    // a change from the other browser can land while this read is in flight, and
+    // the snapshot is then behind it. Replacing the map here dropped that
+    // browser's decision, and the next save from this page wrote the loss back —
+    // which is how a post stayed unread here and read there, with nothing left to
+    // put it right. mergeNewStates is order-free, so the fold is the same either
+    // way round.
+    newState = mergeNewStates(
+      normalizeMap(items[NEW_POSTS_KEY], NEW_POST_LIMIT),
+      newState
+    );
     try {
       const local = await chrome.storage.local.get([
         ACTIVITY_KEY,
